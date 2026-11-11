@@ -165,9 +165,52 @@ namespace RotWorld
         // 피격 중 빨간색과 원래 스프라이트 색상 전환
         public void SetHitColor(bool hit)
         {
-            // 공용 텍스처 대신 개체 렌더러 색상만 변경
-            isHitVisible = hit && !isZombieVisual;
+            // 공용 텍스처 대신 개체 렌더러 색상만 변경하고 인간과 좀비에 동일 적용
+            isHitVisible = hit;
             visual.color = isHitVisible ? HitColor : Color.white;
+        }
+
+
+        // 쓰러진 좀비가 진행도에 맞춰 흰색으로 변하는 표시
+        public void SetDeathProgress(Sprite[] fadeFrames, float progress)
+        {
+            // 사전 생성된 공용 흰색 전환 프레임만 교체해 개체별 텍스처 생성 방지
+            if (!isZombieVisual || fadeFrames == null || fadeFrames.Length == 0)
+            {
+                return;
+            }
+
+            int frame = Mathf.RoundToInt(Mathf.Clamp01(progress) * (fadeFrames.Length - 1));
+            visual.sprite = fadeFrames[frame];
+            visual.color = isHitVisible ? HitColor : Color.white;
+        }
+
+
+        // 현재 쓰러진 자세의 몸체 픽셀 위치에서 먼지 연출 생성 후 원본 숨김
+        public void Disintegrate(UnitDeathVisuals deathVisuals)
+        {
+            // 공용 먼지 자원이 없으면 연출 없이 원본만 숨김
+            visual.enabled = false;
+
+            if (deathVisuals == null || deathVisuals.PixelSprite == null || deathVisuals.DustPoints.Length == 0)
+            {
+                return;
+            }
+
+            // 좌우 반전과 쓰러짐 회전 및 건물 보정이 반영된 표시 변환으로 시작 좌표 계산
+            var startPositions = new Vector3[deathVisuals.DustPoints.Length];
+
+            for (int i = 0; i < startPositions.Length; i++)
+            {
+                Vector2 point = deathVisuals.DustPoints[i];
+                point.x = visual.flipX ? -point.x : point.x;
+                startPositions[i] = visual.transform.TransformPoint(point);
+            }
+
+            // 유닛 파괴 후에도 연출이 남도록 같은 부모 아래 독립 개체로 생성
+            var dust = new GameObject("Zombie Dust");
+            dust.transform.SetParent(transform.parent, false);
+            dust.AddComponent<UnitDustEffect>().Play(deathVisuals.PixelSprite, startPositions, deathVisuals.PixelSize, visual.sortingOrder);
         }
 
 

@@ -55,6 +55,7 @@ namespace RotWorld
         private Sprite[] humanSummonFrames;
         private Sprite[] zombieSummonFrames;
         private Sprite[] conversionFrames;
+        private UnitDeathVisuals zombieDeathVisuals;
         private Transform summonedUnits;
 
         // 기존 씬 카메라와 표시 컴포넌트 연결
@@ -492,7 +493,7 @@ namespace RotWorld
             {
                 animationView.PlaySummon(GetUnitWalkFrames(zombie, true));
             }
-            unit.AddComponent<UnitWander>().Initialize(mapData, zombie, index, GetUnitWalkFrames(true), GetUnitConversionFrames());
+            unit.AddComponent<UnitWander>().Initialize(mapData, zombie, index, GetUnitWalkFrames(true), GetUnitConversionFrames(), GetZombieDeathVisuals());
         }
 
 
@@ -622,6 +623,107 @@ namespace RotWorld
         }
 
 
+        // 쓰러진 좀비의 흰색 전환 프레임과 먼지 픽셀 공용 자원 생성
+        private UnitDeathVisuals GetZombieDeathVisuals()
+        {
+            // 모든 좀비와 변환 개체가 동일 사망 자원 공유
+            if (zombieDeathVisuals != null)
+            {
+                return zombieDeathVisuals;
+            }
+
+            const int FrameCount = 51;
+            int size = PixelsPerTile * UnitPixelScale;
+            var zombie = new Color32[size * size];
+            DrawPeople(zombie, size, new System.Collections.Generic.List<Vector2Int> { Vector2Int.zero }, true);
+            var fadeFrames = new Sprite[FrameCount];
+
+            for (int frame = 0; frame < FrameCount; frame++)
+            {
+                // 투명 배경을 유지하고 불투명 몸체만 좀비 색상에서 흰색으로 보간
+                float progress = frame / (float)(FrameCount - 1);
+                var pixels = new Color32[zombie.Length];
+
+                for (int i = 0; i < pixels.Length; i++)
+                {
+                    pixels[i] = zombie[i].a > 0 ? (Color32)Color.Lerp(zombie[i], Color.white, progress) : zombie[i];
+                }
+
+                fadeFrames[frame] = CreatePointSprite(pixels, size, Vector2.zero, size);
+            }
+
+            // 화면 도트 한 칸 크기의 공용 흰색 먼지 픽셀 생성
+            var pixelColor = new[] { new Color32(255, 255, 255, 255) };
+            Sprite pixelSprite = CreatePointSprite(pixelColor, 1, new Vector2(.5f, .5f), PixelsPerTile);
+
+            // 확대 격자 한 칸을 원본 도트 한 개로 묶어 몸체 픽셀 중심 좌표 수집
+            var consumed = new bool[zombie.Length];
+            var dustPoints = new System.Collections.Generic.List<Vector2>();
+
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    if (zombie[y * size + x].a == 0 || consumed[y * size + x])
+                    {
+                        continue;
+                    }
+
+                    for (int blockY = y; blockY < Mathf.Min(size, y + UnitPixelScale); blockY++)
+                    {
+                        for (int blockX = x; blockX < Mathf.Min(size, x + UnitPixelScale); blockX++)
+                        {
+                            consumed[blockY * size + blockX] = true;
+                        }
+                    }
+
+                    dustPoints.Add(new Vector2(x + UnitPixelScale * .5f, y + UnitPixelScale * .5f) / size);
+                }
+            }
+
+            zombieDeathVisuals = new UnitDeathVisuals(fadeFrames, pixelSprite, dustPoints.ToArray(), 1f / PixelsPerTile);
+            return zombieDeathVisuals;
+        }
+
+
+        // 점 필터 텍스처로 원본 도트를 보존하는 스프라이트 생성
+        private static Sprite CreatePointSprite(Color32[] pixels, int size, Vector2 pivot, float pixelsPerUnit)
+        {
+            // 읽기 해제된 정사각형 텍스처에 픽셀 배열 적용
+            var texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            texture.filterMode = FilterMode.Point;
+            texture.wrapMode = TextureWrapMode.Clamp;
+            texture.SetPixels32(pixels);
+            texture.Apply(false, true);
+            return Sprite.Create(texture, new Rect(0, 0, size, size), pivot, pixelsPerUnit);
+        }
+
+
+        // 좀비 사망 전용 프레임과 먼지 픽셀 자원 해제
+        private void ReleaseZombieDeathVisuals()
+        {
+            // 아직 생성하지 않은 사망 자원 정리 생략
+            if (zombieDeathVisuals == null)
+            {
+                return;
+            }
+
+            foreach (var frame in zombieDeathVisuals.FadeFrames)
+            {
+                Destroy(frame.texture);
+                Destroy(frame);
+            }
+
+            if (zombieDeathVisuals.PixelSprite != null)
+            {
+                Destroy(zombieDeathVisuals.PixelSprite.texture);
+                Destroy(zombieDeathVisuals.PixelSprite);
+            }
+
+            zombieDeathVisuals = null;
+        }
+
+
         // 변환 전용 프레임 자원 해제
         private void ReleaseConversionFrames()
         {
@@ -695,6 +797,7 @@ namespace RotWorld
 
             // 유형별 걷기 전용 프레임과 공용 아이콘의 소유 자원 해제
             ReleaseConversionFrames();
+            ReleaseZombieDeathVisuals();
             ReleaseWalkFrames(humanWalkFrames);
             ReleaseWalkFrames(zombieWalkFrames);
             ReleaseWalkFrames(humanSummonFrames, true);

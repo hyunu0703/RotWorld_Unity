@@ -3,11 +3,11 @@ using UnityEngine;
 namespace RotWorld
 {
     /// <summary>
-    /// 좀비의 근접 공격 시점과 인간 피격 표시 제어
+    /// 좀비와 인간의 근접 공격 시점 및 피격 표시 제어
     /// </summary>
     public sealed class UnitCombat : MonoBehaviour
     {
-        // 충돌 경계에서도 타격 가능한 공격 거리와 준비 및 회복 간격
+        // 충돌 경계에서도 타격 가능한 좀비 공격 거리와 공통 준비 및 회복 간격
         internal const float GrabRange = UnitWander.SeparationDistance;
         private const float DistanceTolerance = .001f;
         private const float Windup = .2f;
@@ -16,6 +16,10 @@ namespace RotWorld
         private const float PursuitResumeDelay = .5f;
         private const float HitFlashDuration = .18f;
         private const float AttackVisualOffset = .15f;
+
+        // 인간의 좀비 반격 거리와 재공격 간격
+        private const float HumanAttackRange = 1f;
+        private const float HumanAttackInterval = 5f;
 
         // 소유 유닛과 공격 대상 및 표시 참조
         private UnitWander movement;
@@ -31,6 +35,7 @@ namespace RotWorld
         private bool hasHit;
         private Vector2 attackDirection;
         public bool BlocksMovement => isAttacking || pursuitDelayRemaining > 0f;
+        private float AttackRange => isZombie ? GrabRange : HumanAttackRange;
 
         // 기존 이동 및 공용 지도와 전투 표시 연결
         public void Initialize(UnitWander movement, CityMap map, bool zombie, UnitWalkAnimation animationView)
@@ -59,14 +64,63 @@ namespace RotWorld
                 return false;
             }
 
-            victim = human;
-            attackDirection = (human.Position - position).normalized;
+            BeginAttack(human, position, AttackInterval);
+            return true;
+        }
+
+
+        // 반격 범위 안의 가장 가까운 좀비에게 공격 시작
+        public bool TryAttackZombie(Vector2 position)
+        {
+            // 좀비 개체와 공격 진행 및 재공격 대기 중에는 탐색 생략
+            if (isZombie || isAttacking || cooldown > 0f)
+            {
+                return false;
+            }
+
+            // 쓰러진 좀비를 제외하고 건물에 가려지지 않은 최단 거리 대상 선택
+            UnitWander target = null;
+            float bestDistance = HumanAttackRange + DistanceTolerance;
+
+            foreach (var zombie in map.ZombieUnits.Values)
+            {
+                if (zombie == null || !zombie.IsZombieTarget)
+                {
+                    continue;
+                }
+
+                float distance = Vector2.Distance(position, zombie.Position);
+
+                if (distance > bestDistance || !UnitSight.HasLineOfSight(map, position, zombie.Position))
+                {
+                    continue;
+                }
+
+                target = zombie;
+                bestDistance = distance;
+            }
+
+            if (target == null)
+            {
+                return false;
+            }
+
+            BeginAttack(target, position, HumanAttackInterval);
+            return true;
+        }
+
+
+        // 공격 대상과 방향 보관 후 준비 동작 시작
+        private void BeginAttack(UnitWander target, Vector2 position, float interval)
+        {
+            // 좀비와 인간이 같은 준비 및 회복 연출을 공유하고 유형별 재공격 간격만 적용
+            victim = target;
+            attackDirection = (target.Position - position).normalized;
             attackTime = 0f;
             hasHit = false;
             isAttacking = true;
-            cooldown = AttackInterval;
+            cooldown = interval;
             animationView.Stop();
-            return true;
         }
 
 
@@ -97,39 +151,45 @@ namespace RotWorld
 
             if (!hasHit && attackTime >= Windup)
             {
-                // 붙잡힌 대상에게 타격 적용 후 이동 금지 해제
+                // 준비 시간 동안 범위를 벗어나지 않은 대상에게만 타격 적용
                 hasHit = true;
 
-                if (victim != null && Vector2.Distance(movement.Position, victim.Position) <= GrabRange + DistanceTolerance &&
+                if (victim != null && Vector2.Distance(movement.Position, victim.Position) <= AttackRange + DistanceTolerance &&
                     UnitSight.HasLineOfSight(map, movement.Position, victim.Position))
                 {
                     victim.ReceiveHit(attackDirection);
 
-                    // 두 번째 타격 콜백에서 공격이 취소되면 회복 대기를 다시 설정하지 않도록 즉시 종료
+                    // 타격 콜백에서 공격이 취소되면 회복 대기를 다시 설정하지 않도록 즉시 종료
                     if (!isAttacking)
                     {
                         return;
                     }
                 }
 
-                if (victim != null)
-                {
-                    victim.ReleaseGrab(this);
-                }
+                // 좀비 공격만 인간 붙잡힘을 소유하므로 타격 직후 이동 금지 해제
+                ReleaseVictimGrab();
             }
 
-            // 공격 회복과 인간 넉백 완료 후 도주 갱신 기회를 보장하고 추적 대기 시작
+            // 공격 회복과 대상 넉백 완료 후 이동 재개
             if (attackTime >= Windup + Recovery && (victim == null || victim.HasResumedAfterKnockback))
             {
+                // 좀비는 추적 대기 후 재추격하고 인간은 회복 직후 도주 재개
                 isAttacking = false;
-                pursuitDelayRemaining = PursuitResumeDelay;
-                if (victim != null)
-                {
-                    victim.ReleaseGrab(this);
-                }
-
+                pursuitDelayRemaining = isZombie ? PursuitResumeDelay : 0f;
+                ReleaseVictimGrab();
                 victim = null;
                 animationView.SetAttackOffset(Vector2.zero);
+            }
+        }
+
+
+        // 좀비 공격자가 소유한 인간 붙잡힘 해제
+        private void ReleaseVictimGrab()
+        {
+            // 인간 공격자는 붙잡기를 사용하지 않으므로 해제 생략
+            if (isZombie && victim != null)
+            {
+                victim.ReleaseGrab(this);
             }
         }
 
@@ -143,9 +203,18 @@ namespace RotWorld
                 return;
             }
 
-            victim.ReleaseGrab(this);
+            CancelAttack();
+        }
+
+
+        // 피격이나 쓰러짐으로 진행 중인 공격 중단
+        public void CancelAttack()
+        {
+            // 붙잡힌 인간과 공격 오프셋을 즉시 복원하고 재공격 대기는 유지
+            ReleaseVictimGrab();
             victim = null;
             isAttacking = false;
+            hasHit = false;
             pursuitDelayRemaining = 0f;
             animationView.SetAttackOffset(Vector2.zero);
         }
@@ -155,18 +224,15 @@ namespace RotWorld
         public void BecomeZombie()
         {
             // 인간 피격 표시와 이전 공격 상태 초기화
+            CancelAttack();
             isZombie = true;
             flashRemaining = 0f;
-            isAttacking = false;
-            hasHit = false;
-            victim = null;
-            pursuitDelayRemaining = 0f;
             cooldown = AttackInterval;
             animationView.SetHitColor(false);
         }
 
 
-        // 인간 피격 색상 표시 시작
+        // 피격 색상 표시 시작
         public void FlashHit()
         {
             // 중복 피격 시 표시 시간 갱신
@@ -179,12 +245,8 @@ namespace RotWorld
         private void OnDisable()
         {
             // 공격자 비활성화나 파괴 시에도 붙잡힌 인간 즉시 해제
-            if (victim != null)
-            {
-                victim.ReleaseGrab(this);
-                victim = null;
-            }
-
+            ReleaseVictimGrab();
+            victim = null;
             pursuitDelayRemaining = 0f;
 
             // 중단된 공격의 시각 오프셋과 색상 제거

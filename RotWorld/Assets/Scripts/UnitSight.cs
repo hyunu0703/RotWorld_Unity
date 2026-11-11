@@ -71,6 +71,12 @@ namespace RotWorld
                     return nearbyTarget;
                 }
 
+                // 쓰러진 현재 좀비는 더 이상 도주 이유로 유지하지 않음
+                if (map.InactiveZombies.Contains(currentTarget))
+                {
+                    return -1;
+                }
+
                 Vector2 target = map.ZombiePositions.TryGetValue(currentTarget, out Vector2 livePosition) ? livePosition : (Vector2)map.Zombies[currentTarget];
 
                 if ((target - observer).sqrMagnitude < FleeReleaseRadius * FleeReleaseRadius)
@@ -86,11 +92,16 @@ namespace RotWorld
         // 도주 방향 평가에 사용할 주변 좀비의 실제 좌표 수집
         public static void CollectNearbyZombies(CityMap map, Vector2 observer, System.Collections.Generic.List<Vector2> threats)
         {
-            // 재사용 목록에 원형 8타일 범위의 좀비만 저장
+            // 재사용 목록에 원형 8타일 범위의 활동 중인 좀비만 저장
             threats.Clear();
 
             for (int i = 0; i < map.Zombies.Count; i++)
             {
+                if (map.InactiveZombies.Contains(i))
+                {
+                    continue;
+                }
+
                 Vector2 target = map.ZombiePositions.TryGetValue(i, out Vector2 livePosition) ? livePosition : (Vector2)map.Zombies[i];
 
                 if ((target - observer).sqrMagnitude <= FleeScanRadius * FleeScanRadius)
@@ -112,7 +123,8 @@ namespace RotWorld
             for (int i = 0; i < units.Count; i++)
             {
 
-                if (units == map.Humans && map.InactiveHumans.Contains(i))
+                // 쓰러진 인간과 좀비는 감지 및 위협 대상에서 제외
+                if ((units == map.Humans && map.InactiveHumans.Contains(i)) || (units == map.Zombies && map.InactiveZombies.Contains(i)))
                 {
                     continue;
                 }

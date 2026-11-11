@@ -104,7 +104,9 @@ namespace RotWorld
         internal HashSet<int> InactiveHumans { get; } = new HashSet<int>();
         internal HashSet<int> ConvertedHumans { get; } = new HashSet<int>();
         internal Dictionary<int, UnitWander> ZombieUnits { get; } = new Dictionary<int, UnitWander>();
+        internal HashSet<int> InactiveZombies { get; } = new HashSet<int>();
         public int HumanCount => Humans.Count - ConvertedHumans.Count;
+        public int ZombieCount => Zombies.Count - InactiveZombies.Count;
         public event Action PopulationChanged;
 
         internal Dictionary<int, UnitWander> HumanUnits { get; } = new Dictionary<int, UnitWander>();

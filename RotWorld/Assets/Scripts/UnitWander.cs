@@ -4,7 +4,7 @@ using UnityEngine;
 namespace RotWorld
 {
     /// <summary>
-    /// 주변 배회와 좀비의 인간 추적 및 인간의 좀비 회피 이동 제어
+    /// 주변 배회와 좀비의 인간 추적 및 인간의 좀비 회피 이동과 피격 후 쓰러짐 제어
     /// </summary>
     public sealed class UnitWander : MonoBehaviour
     {
@@ -70,7 +70,11 @@ namespace RotWorld
         private const float KnockbackDistance = 1f;
         public Vector2 Position => position;
 
-        // 두 번째 피격 후 쓰러짐과 감염 변환 상태
+        // 유형별 누적 피격 후 쓰러짐과 감염 변환 및 좀비 소멸 상태
+        private const int HumanHitsToFall = 2;
+        private const int ZombieHitsToFall = 5;
+        private const float ZombieFadeDuration = 5f;
+        private UnitDeathVisuals deathVisuals;
         private int hitCount;
         private bool isDowned;
         private float downedElapsed;
@@ -81,9 +85,11 @@ namespace RotWorld
         private const float FallDuration = .3f;
         private const float RiseDuration = .3f;
         public bool IsHumanTarget => !isZombie && !isDowned;
+        public bool IsZombieTarget => isZombie && !isDowned;
 
         // 기존 인구 데이터와 이동 및 걷기 표시 연결
-        public void Initialize(CityMap map, bool zombie, int index, Sprite[] zombieFrames = null, Sprite[] conversionFrames = null)
+        public void Initialize(CityMap map, bool zombie, int index, Sprite[] zombieFrames = null, Sprite[] conversionFrames = null,
+            UnitDeathVisuals deathVisuals = null)
         {
             // 필수 지도와 표시 컴포넌트 및 인구 인덱스 검증
             var units = map == null ? null : zombie ? map.Zombies : map.Humans;
@@ -101,6 +107,7 @@ namespace RotWorld
             walkAnimation.SetUnitType(zombie);
             this.zombieFrames = zombieFrames;
             this.conversionFrames = conversionFrames;
+            this.deathVisuals = deathVisuals;
             combat = gameObject.AddComponent<UnitCombat>();
             combat.Initialize(this, map, zombie, walkAnimation);
 
@@ -142,11 +149,24 @@ namespace RotWorld
                 return;
             }
 
-            // 쓰러진 인간의 이동을 차단하고 설정 시간 후 변환
+            // 쓰러진 개체의 이동을 차단하고 좀비는 흰색 전환 후 소멸 및 인간은 설정 시간 후 변환
             if (isDowned)
             {
                 downedElapsed += Time.deltaTime;
                 walkAnimation.SetFallProgress(downedElapsed / FallDuration);
+
+                if (isZombie)
+                {
+                    walkAnimation.SetDeathProgress(deathVisuals == null ? null : deathVisuals.FadeFrames, downedElapsed / ZombieFadeDuration);
+
+                    if (downedElapsed >= ZombieFadeDuration)
+                    {
+                        Disintegrate();
+                    }
+
+                    return;
+                }
+
                 walkAnimation.SetConversionProgress(conversionFrames, downedElapsed / ConversionDelay);
 
                 if (downedElapsed >= ConversionDelay)
@@ -162,6 +182,12 @@ namespace RotWorld
                 riseRemaining = Mathf.Max(0f, riseRemaining - Time.deltaTime);
                 walkAnimation.SetFallProgress(riseRemaining / RiseDuration);
                 return;
+            }
+
+            // 넉백 중이 아닌 인간은 붙잡힌 상태에서도 범위 안의 좀비에게 반격
+            if (!isZombie && knockbackElapsed >= KnockbackDuration)
+            {
+                combat.TryAttackZombie(position);
             }
 
             // 공격 준비 중 붙잡힌 인간은 도주와 걷기 모션 중지
@@ -439,24 +465,32 @@ namespace RotWorld
             restRemaining = 0f;
         }
 
-        // 인간 피격의 최초 감속과 지정 거리 넉백 시작
+        // 피격 누적과 지정 거리 넉백 시작 및 인간의 최초 감속
         public void ReceiveHit(Vector2 direction)
         {
-            // 좀비에 대한 피격 요청 무시 및 중복 감속 방지
-            if (!IsHumanTarget || map == null)
+            // 쓰러진 개체와 초기화 전 피격 요청 무시
+            if (isDowned || map == null)
             {
                 return;
             }
 
+            // 피격 시 진행 중인 자신의 공격은 중단
+            combat.CancelAttack();
             hitCount++;
 
-            if (hitCount >= 2)
+            if (hitCount >= (isZombie ? ZombieHitsToFall : HumanHitsToFall))
             {
                 FallDown();
                 return;
             }
 
-            hasBeenHit = true;
+            // 감속은 인간만 적용하고 좀비는 넉백 후 추적 또는 배회 재개
+            if (!isZombie)
+            {
+                hasBeenHit = true;
+            }
+
+            wanderExitTarget = null;
             ReleaseReservations();
             map.ReleaseTile(currentTile);
             currentTile = Vector2Int.RoundToInt(position);
@@ -475,9 +509,16 @@ namespace RotWorld
         }
 
 
-        // 두 번째 피격 후 이동과 추가 타격 중단 및 쓰러짐 시작
+        // 마지막 피격 후 이동과 추가 타격 중단 및 쓰러짐 시작
         private void FallDown()
         {
+            // 좀비는 별도 소멸 흐름으로 분기
+            if (isZombie)
+            {
+                FallDownZombie();
+                return;
+            }
+
             // 개체 점유는 유지하고 진행 중 이동 예약만 반환
             isDowned = true;
             downedElapsed = 0f;
@@ -502,6 +543,44 @@ namespace RotWorld
                     zombie.ForgetHuman(this, populationIndex);
                 }
             }
+        }
+
+
+        // 다섯 번째 피격 후 좀비의 추적과 공격 중단 및 쓰러짐 시작
+        private void FallDownZombie()
+        {
+            // 시체 위치 점유는 유지해 다른 개체와 겹침을 막고 이동 예약만 반환
+            isDowned = true;
+            downedElapsed = 0f;
+            knockbackElapsed = KnockbackDuration;
+            knockbackFinishedFrame = Time.frameCount;
+            ReleaseReservations();
+            path.Clear();
+            pathIndex = 0;
+            hasChasePath = false;
+            chaseTarget = -1;
+            isDirectPursuit = false;
+            wanderExitTarget = null;
+
+            // 감지와 인간 반격 및 인구 표시에서 제외
+            map.InactiveZombies.Add(populationIndex);
+            map.NotifyPopulationChanged();
+
+            // 피격 색상 후 흰색 전환 시작 프레임 적용
+            walkAnimation.SetKnockbackHeight(0f);
+            walkAnimation.Stop();
+            walkAnimation.SetDeathProgress(deathVisuals == null ? null : deathVisuals.FadeFrames, 0f);
+            combat.FlashHit();
+        }
+
+
+        // 흰색 전환을 마친 좀비를 먼지 연출로 교체 후 제거
+        private void Disintegrate()
+        {
+            // 먼지 연출을 독립 개체로 남기고 점유 해제는 OnDestroy에서 처리
+            walkAnimation.Disintegrate(deathVisuals);
+            enabled = false;
+            Destroy(gameObject);
         }
 
 

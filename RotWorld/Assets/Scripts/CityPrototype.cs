@@ -229,7 +229,7 @@ namespace RotWorld
                 summaryMap.PopulationChanged += RefreshSummary;
             }
 
-            summaryLabel.text = $"섬 전체 지역  |  {map.Size} × {map.Size}  |  건물 {map.Buildings.Count}채\n인간 {map.HumanCount} · 좀비 {map.Zombies.Count}  |  드래그 이동 · 휠 확대";
+            summaryLabel.text = $"섬 전체 지역  |  {map.Size} × {map.Size}  |  건물 {map.Buildings.Count}채\n인간 {map.HumanCount} · 좀비 {map.ZombieCount}  |  드래그 이동 · 휠 확대";
         }
 
 
