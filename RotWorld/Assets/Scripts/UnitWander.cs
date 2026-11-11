@@ -223,7 +223,7 @@ namespace RotWorld
             // 공격 준비 중 붙잡힌 인간은 도주와 걷기 모션 중지
             if (IsGrabbed)
             {
-                walkAnimation.Stop();
+                walkAnimation.Stop(cooperativeLeader == null);
                 return;
             }
 
@@ -235,7 +235,7 @@ namespace RotWorld
 
             if (combat.BlocksMovement)
             {
-                walkAnimation.Stop();
+                walkAnimation.Stop(cooperativeLeader == null);
                 return;
             }
 
@@ -245,8 +245,8 @@ namespace RotWorld
                 map.HumanSpeeds[populationIndex] = humanSpeed * (hasBeenHit ? InjuredSpeedMultiplier : 1f) * speedVariation * UnitPathfinder.SpeedMultiplier(map, currentTile);
             }
 
-            // 공격 종료 직후에는 쓰러진 인간에서 안전하게 떨어지는 배회 구간 우선 실행
-            if (isZombie && wanderExitTarget.HasValue)
+            // 처치 직후 유형과 무관하게 쓰러진 상대에서 떨어지는 배회 구간 우선 실행
+            if (wanderExitTarget.HasValue)
             {
                 UpdateWanderExit();
                 return;
@@ -1056,6 +1056,16 @@ namespace RotWorld
 
             // 감지와 인간 반격 및 인구 표시에서 제외
             map.InactiveZombies.Add(populationIndex);
+
+            // 소멸 연출과 분리해 관련 인간의 공격과 협동 추적을 즉시 해제
+            foreach (var human in map.HumanUnits.Values)
+            {
+                if (human != null)
+                {
+                    human.ForgetZombie(this, populationIndex);
+                }
+            }
+
             map.NotifyPopulationChanged();
 
             // 피격 색상 후 흰색 전환 시작 프레임 적용
@@ -1099,7 +1109,65 @@ namespace RotWorld
         }
 
 
-        // 쓰러진 인간 가까이에서 충돌 없이 빠져나갈 배회 시작 구간 선택
+        // 쓰러진 좀비의 공격과 추적 및 협동 연결 해제 후 즉시 배회 준비
+        private void ForgetZombie(UnitWander zombie, int zombieIndex)
+        {
+            // 살아 있는 인간 중 해당 좀비와 관계된 개체만 상태 전환
+            if (!IsHumanTarget)
+            {
+                return;
+            }
+
+            bool wasCooperating = cooperativeZombie == zombie;
+            bool wasAttacking = combat.CancelZombieTarget(zombie);
+
+            if (!wasCooperating && !wasAttacking && chaseTarget != zombieIndex)
+            {
+                return;
+            }
+
+            if (wasCooperating)
+            {
+                // 연결 해제로 상대 역할 정보가 사라지기 전에 두 인간의 배회 복귀 처리
+                UnitWander partner = cooperativeLeader != null ? cooperativeLeader : cooperativeHelper;
+                ReleaseCooperativeAttack();
+
+                if (partner != null && partner.IsHumanTarget)
+                {
+                    partner.combat.CancelZombieTarget(zombie);
+                    partner.ResumeAfterZombieDefeat(zombie);
+                }
+            }
+
+            ResumeAfterZombieDefeat(zombie);
+        }
+
+
+        // 좀비 처치 직후 다른 위협 확인과 배회 이탈 구간 준비
+        private void ResumeAfterZombieDefeat(UnitWander zombie)
+        {
+            // 다른 좀비가 보이면 도주 우선 및 위협이 없으면 시체와 분리되는 이동 시작
+            ResetCooperativeMovement();
+            needsFleePathUpdate = false;
+            wanderExitTarget = null;
+            chaseTarget = UnitSight.FindFleeZombie(map, position, -1);
+
+            if (chaseTarget >= 0)
+            {
+                return;
+            }
+
+            BeginWanderExit(zombie.Position);
+
+            if (!wanderExitTarget.HasValue)
+            {
+                UnitPathfinder.FindWanderPath(map, currentTile, random, path);
+                PreparePathStart();
+            }
+        }
+
+
+        // 쓰러진 상대 가까이에서 충돌 없이 빠져나갈 배회 시작 구간 선택
         private void BeginWanderExit(Vector2 fallenPosition)
         {
             // 일반 타일 경로가 근접 시체에 막히는 구간은 실제 좌표에서 이탈
@@ -1136,10 +1204,11 @@ namespace RotWorld
         // 배회 시작 구간을 실제 좌표에서 연속 이동
         private void UpdateWanderExit()
         {
-            // 공격 대기 없이 평상시 좀비 속도로 근접 구간 이탈
+            // 공격 대기 없이 유형별 평상시 이동 속도로 근접 구간 이탈
             Vector2 destination = wanderExitTarget.Value;
             Vector2 direction = destination - position;
-            float remaining = zombieSpeed * speedVariation * UnitPathfinder.SpeedMultiplier(map, currentTile) * Time.deltaTime;
+            float baseSpeed = isZombie ? zombieSpeed : humanSpeed * (hasBeenHit ? InjuredSpeedMultiplier : 1f);
+            float remaining = baseSpeed * speedVariation * UnitPathfinder.SpeedMultiplier(map, currentTile) * Time.deltaTime;
             float travelled = 0f;
 
             while (remaining > 0f && position != destination)
@@ -1477,7 +1546,7 @@ namespace RotWorld
 
                 if (path.Count == 0)
                 {
-                    walkAnimation.Stop();
+                    walkAnimation.Stop(isZombie);
                     return;
                 }
 
@@ -1559,7 +1628,7 @@ namespace RotWorld
             }
             else
             {
-                walkAnimation.Stop();
+                walkAnimation.Stop(isZombie);
             }
 
             // 이동 직후 유형별 공격 거리 검사로 근접 공격 누락 방지

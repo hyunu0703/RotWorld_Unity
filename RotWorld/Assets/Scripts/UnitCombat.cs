@@ -111,8 +111,7 @@ namespace RotWorld
                 return false;
             }
 
-            BeginAttack(target, position, CurrentHumanAttackInterval);
-            isCooperativeAttack = requiredTarget != null;
+            BeginAttack(target, position, CurrentHumanAttackInterval, requiredTarget != null);
             return true;
         }
 
@@ -134,17 +133,22 @@ namespace RotWorld
 
 
         // 공격 대상과 방향 보관 후 준비 동작 시작
-        private void BeginAttack(UnitWander target, Vector2 position, float interval)
+        private void BeginAttack(UnitWander target, Vector2 position, float interval, bool isCooperativeAttack = false)
         {
             // 좀비와 인간이 같은 준비 및 회복 연출을 공유하고 유형별 재공격 간격만 적용
             victim = target;
-            isCooperativeAttack = false;
+            this.isCooperativeAttack = isCooperativeAttack;
             attackDirection = (target.Position - position).normalized;
             attackTime = 0f;
             hasHit = false;
             isAttacking = true;
             cooldown = interval;
-            animationView.Stop();
+
+            // 이동 준비 공격은 걷기 프레임과 누적 보폭 유지
+            if (!isCooperativeAttack)
+            {
+                animationView.Stop();
+            }
         }
 
 
@@ -165,6 +169,13 @@ namespace RotWorld
 
             if (!isAttacking)
             {
+                return;
+            }
+
+            // 사망과 소멸 연출 중인 대상의 회복이나 파괴를 기다리지 않고 공격 종료
+            if (victim == null || (isZombie ? !victim.IsHumanTarget : !victim.IsZombieTarget))
+            {
+                CancelAttack();
                 return;
             }
 
@@ -241,6 +252,20 @@ namespace RotWorld
             }
 
             CancelAttack();
+        }
+
+
+        // 쓰러진 좀비를 공격 중인 인간의 공격 상태 즉시 해제
+        internal bool CancelZombieTarget(UnitWander zombie)
+        {
+            // 다른 대상과 좀비 자신의 공격 상태 보존
+            if (isZombie || victim != zombie)
+            {
+                return false;
+            }
+
+            CancelAttack();
+            return true;
         }
 
 

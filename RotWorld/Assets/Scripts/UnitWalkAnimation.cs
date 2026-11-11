@@ -299,11 +299,15 @@ namespace RotWorld
         }
 
 
-        // 휴식 시 다리 정지 포즈로 복원
-        public void Stop()
+        // 정지 포즈 적용 및 짧은 추적 정지 후 재개할 보폭 선택적 유지
+        public void Stop(bool resetStride = true)
         {
-            // 프레임 진행 초기화와 원본 아이콘 복원
-            distance = 0f;
+            // 반복되는 짧은 멈춤에서 보폭 누적이 사라지지 않도록 선택적 초기화
+            if (resetStride)
+            {
+                distance = 0f;
+            }
+
             visual.sprite = (isSummonWhite ? summonFrames : frames)[0];
         }
     }
