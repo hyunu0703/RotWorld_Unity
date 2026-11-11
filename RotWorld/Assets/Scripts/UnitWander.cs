@@ -44,7 +44,7 @@ namespace RotWorld
         // 이동 중 출발 및 도착과 대각선 교차 영역 예약
         private bool isDirectPursuit;
         private Vector2? wanderExitTarget;
-        private const float SeparationDistance = .9f;
+        internal const float SeparationDistance = .9f;
         private const float PursuitSpeedAdvantage = 1.25f;
         private const float MaximumSubstep = .1f;
         private readonly List<Vector2Int> reservations = new List<Vector2Int>();
@@ -93,6 +93,7 @@ namespace RotWorld
 
             this.map = map;
             isZombie = zombie;
+            walkAnimation.SetMap(map);
             walkAnimation.SetUnitType(zombie);
             this.zombieFrames = zombieFrames;
             this.conversionFrames = conversionFrames;
@@ -119,6 +120,7 @@ namespace RotWorld
 
             // 생성 직후에는 휴식 없이 기존 배회 경로로 이동 시작
             UnitPathfinder.FindWanderPath(map, currentTile, random, path);
+            PreparePathStart();
 
             if (path.Count == 0)
             {
@@ -206,6 +208,7 @@ namespace RotWorld
                 if (restRemaining <= 0f && chaseTarget < 0)
                 {
                     UnitPathfinder.FindWanderPath(map, currentTile, random, path);
+                    PreparePathStart();
                     pathIndex = 0;
 
                     if (path.Count == 0)
@@ -265,7 +268,7 @@ namespace RotWorld
                 float step = Mathf.Min(distance, remainingTime * terrainSpeed);
                 Vector2 nextPosition = Vector2.MoveTowards(position, target, step);
 
-                if (!HasUnitClearance(nextPosition))
+                if (!CanPursueStep(nextPosition))
                 {
                     break;
                 }
@@ -367,6 +370,7 @@ namespace RotWorld
                     UnitPathfinder.FindFleePath(map, currentTile, destination, path);
                 }
 
+                PreparePathStart();
                 pathIndex = 0;
                 chaseDestination = destination;
                 hasChasePath = true;
@@ -379,11 +383,23 @@ namespace RotWorld
         }
 
 
+        // 넉백 후 소수점 좌표에서 건물 모서리를 침범하는 경로 시작 구간 보정
+        private void PreparePathStart()
+        {
+            // 첫 목적지 직선이 몸체 충돌에 막힐 때 안전한 현재 타일 중심부터 경유
+            if (path.Count > 0 && position != (Vector2)currentTile && !IsTerrainClear(position, path[0]) &&
+                IsTerrainClear(position, currentTile))
+            {
+                path.Insert(0, currentTile);
+            }
+        }
+
+
         // 공격 준비 동안 인간 이동을 금지하는 붙잡기 시작
         public bool TryGrab(UnitCombat owner)
         {
-            // 기존 소유자와 넉백 중 재포획 및 비활성 대상 거부
-            if (!IsHumanTarget || !isActiveAndEnabled || owner == null || IsGrabbed || knockbackElapsed < KnockbackDuration)
+            // 기존 소유자와 비활성 대상 거부 및 넉백 후 도주 갱신 기회 보장
+            if (!IsHumanTarget || !isActiveAndEnabled || owner == null || IsGrabbed || !HasResumedAfterKnockback)
             {
                 return false;
             }
@@ -827,12 +843,6 @@ namespace RotWorld
                 // 앞을 가로막은 유닛은 가까운 측면 후보로 회피하고 겹침 방지 유지
                 if (!CanPursueStep(next))
                 {
-                    // 목표에 충분히 접근한 경우 회전하지 않고 최소 간격 유지
-                    if (hasTarget && Vector2.Distance(position, target) <= UnitCombat.GrabRange + MaximumSubstep * 2f)
-                    {
-                        break;
-                    }
-
                     bool canAvoid = false;
                     const float AvoidanceAngle = 45f;
                     Vector2 forward = (waypoint - position).normalized;
@@ -905,18 +915,25 @@ namespace RotWorld
         }
 
 
-        // 선분을 작은 간격으로 검사해 물과 건물 및 모서리 관통 차단
+        // 이동 구간의 몸체 영역과 지형을 검사해 건물 및 모서리 관통 차단
         private bool IsTerrainClear(Vector2 from, Vector2 to)
         {
-            // 논리 타일 중심 기준으로 연속 보행 구간 검사
+            // 건물 표시의 실제 경계와 스프라이트 불투명 영역으로 연속 충돌 검사
             int samples = Mathf.Max(1, Mathf.CeilToInt(Vector2.Distance(from, to) / MaximumSubstep));
             Vector2Int previous = Vector2Int.RoundToInt(from);
+            Vector2 previousPosition = from;
+            Rect body = UnitWalkAnimation.BodyBounds;
 
             for (int i = 1; i <= samples; i++)
             {
-                Vector2Int tile = Vector2Int.RoundToInt(Vector2.Lerp(from, to, i / (float)samples));
+                Vector2 next = Vector2.Lerp(from, to, i / (float)samples);
+                Vector2Int tile = Vector2Int.RoundToInt(next);
+                var sweptBody = Rect.MinMaxRect(Mathf.Min(previousPosition.x, next.x) + body.xMin,
+                    Mathf.Min(previousPosition.y, next.y) + body.yMin,
+                    Mathf.Max(previousPosition.x, next.x) + body.xMax,
+                    Mathf.Max(previousPosition.y, next.y) + body.yMax);
 
-                if (!UnitPathfinder.CanOccupy(map, tile) ||
+                if (!UnitPathfinder.HasBuildingClearance(map, sweptBody) || !UnitPathfinder.CanOccupy(map, tile) ||
                     !UnitPathfinder.CanOccupy(map, new Vector2Int(previous.x, tile.y)) ||
                     !UnitPathfinder.CanOccupy(map, new Vector2Int(tile.x, previous.y)))
                 {
@@ -924,13 +941,14 @@ namespace RotWorld
                 }
 
                 previous = tile;
+                previousPosition = next;
             }
 
             return true;
         }
 
 
-        // 추적 대상만 붙잡기 거리까지 접근 허용하고 나머지 유닛 간격 유지
+        // 공격 거리와 동일한 최소 간격으로 모든 유닛의 겹침 차단
         private bool HasUnitClearance(Vector2 next)
         {
             // 이미 근접한 상대와는 멀어지는 이동과 넉백을 허용
@@ -941,9 +959,7 @@ namespace RotWorld
                     continue;
                 }
 
-                float clearance = isZombie && human.Key == chaseTarget ? UnitCombat.GrabRange : SeparationDistance;
-
-                if (!CanSeparateFrom(position, next, human.Value, clearance))
+                if (!CanSeparateFrom(position, next, human.Value, SeparationDistance))
                 {
                     return false;
                 }

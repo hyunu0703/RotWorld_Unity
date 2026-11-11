@@ -13,6 +13,11 @@ namespace RotWorld
         private static readonly Color HitColor = new Color32(160, 0, 0, 255);
         private static readonly int[] FrameSequence = { 0, 1, 0, 2 };
 
+        // CityMapView에서 생성하는 인물의 불투명 영역과 건물 충돌 연결
+        internal static readonly Rect BodyBounds = new Rect(.25f, 0f, .375f, .875f);
+        private CityMap map;
+        private float fallAngle;
+
         // 공용 프레임과 개체 렌더러 및 누적 이동 거리
         private SpriteRenderer visual;
         private int humanSortingOrder;
@@ -41,6 +46,14 @@ namespace RotWorld
             humanSortingOrder = visual.sortingOrder;
             this.frames = frames;
             Stop();
+        }
+
+
+        // 논리 이동과 표시 모션의 공용 건물 지도 연결
+        internal void SetMap(CityMap map)
+        {
+            // 이동 초기화에서 전달한 건물 타일 참조 보관
+            this.map = map;
         }
 
 
@@ -113,8 +126,10 @@ namespace RotWorld
         // 두 번째 피격 후 몸체가 옆으로 쓰러지는 연출
         public void SetFallProgress(float progress)
         {
-            // 논리 위치를 유지한 채 표시 몸체만 회전
-            visual.transform.localRotation = Quaternion.Euler(0f, 0f, 90f * Mathf.SmoothStep(0f, 1f, progress));
+            // 발밑 대신 몸체 중심 기준의 회전으로 쓰러짐 위치 이탈 방지
+            const float FallenAngle = 90f;
+            fallAngle = FallenAngle * Mathf.SmoothStep(0f, 1f, progress);
+            ApplyVisualPosition();
         }
 
 
@@ -174,12 +189,56 @@ namespace RotWorld
         }
 
 
-        // 방향 반전과 공격 및 공중 오프셋 합성
+        // 이동과 전투 Update 이후 최종 표시 영역의 건물 침범 보정
+        private void LateUpdate()
+        {
+            // 초기화된 유닛의 최신 지면 좌표에 도약과 쓰러짐 충돌 반영
+            if (map != null && visual != null)
+            {
+                ApplyVisualPosition();
+            }
+        }
+
+
+        // 방향 반전과 중심 회전 및 건물 밖 모션 오프셋 합성
         private void ApplyVisualPosition()
         {
-            // 추적과 충돌에 사용하는 부모 지면 좌표 유지
-            visual.transform.localPosition = (visual.flipX ? Vector3.right * MirrorOffset : Vector3.zero) +
-                (Vector3)attackOffset + Vector3.up * knockbackHeight;
+            // 좌우 반전 후 몸체 중심을 유지하는 회전과 도약 오프셋 구성
+            Quaternion rotation = Quaternion.Euler(0f, 0f, fallAngle);
+            Vector2 center = BodyBounds.center;
+            center.x = visual.flipX ? -center.x : center.x;
+            Vector2 offset = (visual.flipX ? Vector2.right * MirrorOffset : Vector2.zero) +
+                center - (Vector2)(rotation * center) + attackOffset + Vector2.up * knockbackHeight;
+
+            // 네 모서리를 포함하는 보수적인 표시 영역으로 회전 중간 단계까지 검사
+            Vector2 min = Vector2.positiveInfinity;
+            Vector2 max = Vector2.negativeInfinity;
+
+            for (int corner = 0; corner < 4; corner++)
+            {
+                var point = new Vector2(corner % 2 == 0 ? BodyBounds.xMin : BodyBounds.xMax,
+                    corner < 2 ? BodyBounds.yMin : BodyBounds.yMax);
+                point.x = visual.flipX ? -point.x : point.x;
+                point = (Vector2)(rotation * point) + offset;
+                min = Vector2.Min(min, point);
+                max = Vector2.Max(max, point);
+            }
+
+            Vector2 origin = transform.localPosition;
+            var bounds = Rect.MinMaxRect(origin.x + min.x, origin.y + min.y, origin.x + max.x, origin.y + max.y);
+
+            if (map != null && !UnitPathfinder.HasBuildingClearance(map, bounds))
+            {
+                // 충돌 시 지면 몸체 중심이 있는 빈 타일 안으로 표시만 제한
+                // 모든 회전 각도의 몸체 폭과 높이가 한 타일 미만인 기존 인물 규격 사용
+                Vector2 tile = Vector2Int.FloorToInt(origin + BodyBounds.center);
+                const float VisualMargin = .0001f;
+                offset.x += Mathf.Clamp(bounds.xMin, tile.x + VisualMargin, tile.x + 1f - bounds.width - VisualMargin) - bounds.xMin;
+                offset.y += Mathf.Clamp(bounds.yMin, tile.y + VisualMargin, tile.y + 1f - bounds.height - VisualMargin) - bounds.yMin;
+            }
+
+            visual.transform.localRotation = rotation;
+            visual.transform.localPosition = offset;
         }
 
 

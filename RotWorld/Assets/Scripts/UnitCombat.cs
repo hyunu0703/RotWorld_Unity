@@ -7,8 +7,8 @@ namespace RotWorld
     /// </summary>
     public sealed class UnitCombat : MonoBehaviour
     {
-        // 공격 준비와 회복 및 재공격 간격
-        internal const float GrabRange = .5f;
+        // 충돌 경계에서도 타격 가능한 공격 거리와 준비 및 회복 간격
+        internal const float GrabRange = UnitWander.SeparationDistance;
         private const float DistanceTolerance = .001f;
         private const float Windup = .2f;
         private const float Recovery = .25f;

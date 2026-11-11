@@ -29,6 +29,35 @@ namespace RotWorld
         }
 
 
+        // 표시 영역 전체의 건물 및 지도 경계 침범 여부 조회
+        internal static bool HasBuildingClearance(CityMap map, Rect bounds)
+        {
+            // 건물 표시와 동일한 정수 타일 경계 기준으로 몸체 영역 검사
+            if (map == null || bounds.xMin < 0f || bounds.yMin < 0f || bounds.xMax > map.Size || bounds.yMax > map.Size)
+            {
+                return false;
+            }
+
+            int minX = Mathf.FloorToInt(bounds.xMin);
+            int minY = Mathf.FloorToInt(bounds.yMin);
+            int maxX = Mathf.CeilToInt(bounds.xMax) - 1;
+            int maxY = Mathf.CeilToInt(bounds.yMax) - 1;
+
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                {
+                    if (map.Tiles[y * map.Size + x] == CityGenerator.Building)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+
         // 타일 지형에 따른 이동 속도 배율 조회
         public static float SpeedMultiplier(CityMap map, Vector2Int tile)
         {
