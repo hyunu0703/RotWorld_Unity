@@ -41,6 +41,10 @@ namespace RotWorld
         private bool hasChasePath;
         private Vector2Int chaseDestination;
 
+        // 도주 중 주변 좀비 좌표 재사용과 다음 타일 경계의 방향 갱신
+        private readonly List<Vector2> fleeThreats = new List<Vector2>();
+        private bool needsFleePathUpdate;
+
         // 이동 중 출발 및 도착과 대각선 교차 영역 예약
         private bool isDirectPursuit;
         private Vector2? wanderExitTarget;
@@ -320,6 +324,7 @@ namespace RotWorld
             {
                 detectionRemaining = DetectionInterval;
                 chaseTarget = isZombie ? UnitSight.FindChaseHuman(map, position, chaseTarget) : UnitSight.FindFleeZombie(map, position, chaseTarget);
+                needsFleePathUpdate = !isZombie && chaseTarget >= 0;
             }
 
             // 연속 추격 중에는 감지만 갱신하고 타일 경로 교체 생략
@@ -355,19 +360,21 @@ namespace RotWorld
                 destination = movingTarget;
             }
 
-            if (!hasChasePath || destination != chaseDestination || (pathIndex >= path.Count && pathRetryRemaining <= 0f))
+            if (!hasChasePath || needsFleePathUpdate || destination != chaseDestination || (pathIndex >= path.Count && pathRetryRemaining <= 0f))
             {
                 // 일시적으로 막힌 경로도 주기적으로 재탐색해 영구 대기 방지
                 pathRetryRemaining = DetectionInterval;
 
-                // 좀비는 인간 위치 추적 및 인간은 좀비 반대 방향으로 도주
+                // 좀비는 인간 위치 추적 및 인간은 주변 좀비가 없는 방향으로 도주
                 if (isZombie)
                 {
                     UnitPathfinder.FindTargetPath(map, currentTile, destination, path, true);
                 }
                 else
                 {
-                    UnitPathfinder.FindFleePath(map, currentTile, destination, path);
+                    UnitSight.CollectNearbyZombies(map, position, fleeThreats);
+                    UnitPathfinder.FindFleePath(map, currentTile, destination, fleeThreats, path);
+                    needsFleePathUpdate = false;
                 }
 
                 PreparePathStart();

@@ -10,13 +10,14 @@ namespace RotWorld
         // 최초 감지와 유형별 반응 종료 거리
         public const float DetectionRadius = 5f;
         public const float FleeReleaseRadius = 15f;
+        public const float FleeScanRadius = 8f;
         private const float ChaseReleaseRadius = 8f;
 
         // 감지 반경 안에서 건물에 가려지지 않은 가장 가까운 인간 조회
         public static int FindVisibleHuman(CityMap map, Vector2 observer)
         {
             // 인간 목록에 공통 감지 조건 적용
-            return FindVisibleUnit(map, observer, map.Humans);
+            return FindNearestUnit(map, observer, map.Humans);
         }
 
 
@@ -44,7 +45,7 @@ namespace RotWorld
         public static int FindVisibleZombie(CityMap map, Vector2 observer)
         {
             // 좀비 목록에 인간 감지와 동일한 거리 및 차폐 조건 적용
-            return FindVisibleUnit(map, observer, map.Zombies);
+            return FindNearestUnit(map, observer, map.Zombies);
         }
 
 
@@ -62,6 +63,14 @@ namespace RotWorld
             // 감지 범위나 시야를 벗어나도 현재 좀비와 15타일 미만이면 도주 유지
             if (currentTarget >= 0 && currentTarget < map.Zombies.Count)
             {
+                // 도주 중에는 차폐 여부와 무관하게 주변 8타일의 새 위협 우선 확인
+                int nearbyTarget = FindNearestUnit(map, observer, map.Zombies, FleeScanRadius, false);
+
+                if (nearbyTarget >= 0)
+                {
+                    return nearbyTarget;
+                }
+
                 Vector2 target = map.ZombiePositions.TryGetValue(currentTarget, out Vector2 livePosition) ? livePosition : (Vector2)map.Zombies[currentTarget];
 
                 if ((target - observer).sqrMagnitude < FleeReleaseRadius * FleeReleaseRadius)
@@ -74,12 +83,31 @@ namespace RotWorld
         }
 
 
-        // 지정 인구 목록에서 가장 가까운 시야 내 대상 조회
-        private static int FindVisibleUnit(CityMap map, Vector2 observer, System.Collections.Generic.List<Vector2Int> units)
+        // 도주 방향 평가에 사용할 주변 좀비의 실제 좌표 수집
+        public static void CollectNearbyZombies(CityMap map, Vector2 observer, System.Collections.Generic.List<Vector2> threats)
+        {
+            // 재사용 목록에 원형 8타일 범위의 좀비만 저장
+            threats.Clear();
+
+            for (int i = 0; i < map.Zombies.Count; i++)
+            {
+                Vector2 target = map.ZombiePositions.TryGetValue(i, out Vector2 livePosition) ? livePosition : (Vector2)map.Zombies[i];
+
+                if ((target - observer).sqrMagnitude <= FleeScanRadius * FleeScanRadius)
+                {
+                    threats.Add(target);
+                }
+            }
+        }
+
+
+        // 지정 거리와 차폐 조건을 만족하는 가장 가까운 대상 조회
+        private static int FindNearestUnit(CityMap map, Vector2 observer, System.Collections.Generic.List<Vector2Int> units,
+            float radius = DetectionRadius, bool requireLineOfSight = true)
         {
             // 기존 인구 목록의 최신 타일 위치에서 거리와 시야 검사
             int nearest = -1;
-            float bestDistance = DetectionRadius * DetectionRadius;
+            float bestDistance = radius * radius;
 
             for (int i = 0; i < units.Count; i++)
             {
@@ -93,7 +121,7 @@ namespace RotWorld
                 Vector2 target = livePositions.TryGetValue(i, out Vector2 livePosition) ? livePosition : (Vector2)units[i];
                 float distance = (target - observer).sqrMagnitude;
 
-                if (distance > bestDistance || !HasLineOfSight(map, observer, target))
+                if (distance > bestDistance || (requireLineOfSight && !HasLineOfSight(map, observer, target)))
                 {
                     continue;
                 }

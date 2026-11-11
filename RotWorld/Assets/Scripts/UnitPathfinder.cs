@@ -173,16 +173,68 @@ namespace RotWorld
             return (Mathf.Max(dx, dy) + (DiagonalDistance - 1f) * Mathf.Min(dx, dy)) / MaximumTerrainSpeed;
         }
 
-        // 좀비 반대 방향으로 이동 가능한 도주 경로 탐색
-        public static void FindFleePath(CityMap map, Vector2Int start, Vector2Int threat, List<Vector2Int> path)
+        // 주변 좀비 사이의 빈 방향을 우선하는 도주 경로 탐색
+        public static void FindFleePath(CityMap map, Vector2Int start, Vector2Int threat, IReadOnlyList<Vector2> threats, List<Vector2Int> path)
         {
-            // 공통 보행 탐색에서 도주 방향과 위협 거리 평가 사용
-            FindPath(map, start, null, null, path, threat);
+            // 주변 위협 전체를 공통 보행 탐색의 방향과 구간 위험도 평가에 전달
+            FindPath(map, start, null, null, path, threat, threats);
+        }
+
+
+        // 주변 좀비 방향과의 최소 각도 간격이 가장 큰 도주 방향 선택
+        private static Vector2 FindEscapeDirection(Vector2 start, Vector2 threat, IReadOnlyList<Vector2> threats)
+        {
+            // 한 좀비의 반대 방향을 기준으로 원형 후보 평가 및 동점 방향 유지
+            const int DirectionCount = 32;
+            Vector2 away = (start - threat).normalized;
+            float baseAngle = Mathf.Atan2(away.y, away.x);
+            float bestAlignment = float.PositiveInfinity;
+            Vector2 bestDirection = away;
+
+            for (int i = 0; i < DirectionCount; i++)
+            {
+                float angle = baseAngle + i * (Mathf.PI * 2f / DirectionCount);
+                var direction = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                float alignment = Vector2.Dot(direction, (threat - start).normalized);
+
+                for (int j = 0; j < threats.Count; j++)
+                {
+                    alignment = Mathf.Max(alignment, Vector2.Dot(direction, (threats[j] - start).normalized));
+                }
+
+                if (alignment < bestAlignment)
+                {
+                    bestAlignment = alignment;
+                    bestDirection = direction;
+                }
+            }
+
+            return bestDirection;
+        }
+
+
+        // 이동 선분과 전체 위협 사이의 최소 거리 조회
+        private static float NearestThreatDistance(Vector2 from, Vector2 to, Vector2 threat, IReadOnlyList<Vector2> threats)
+        {
+            // 선분 투영으로 대각선 이동 중 좀비 근접 구간까지 평가
+            Vector2 delta = to - from;
+            float lengthSquared = delta.sqrMagnitude;
+            float nearest = float.PositiveInfinity;
+
+            for (int i = -1; i < threats.Count; i++)
+            {
+                Vector2 target = i < 0 ? threat : threats[i];
+                float progress = lengthSquared > 0f ? Mathf.Clamp01(Vector2.Dot(target - from, delta) / lengthSquared) : 0f;
+                nearest = Mathf.Min(nearest, (target - (from + delta * progress)).magnitude);
+            }
+
+            return nearest;
         }
 
 
         // 배회와 추적 및 도주의 공통 보행 탐색
-        private static void FindPath(CityMap map, Vector2Int start, System.Random random, Vector2Int? target, List<Vector2Int> path, Vector2Int? threat = null)
+        private static void FindPath(CityMap map, Vector2Int start, System.Random random, Vector2Int? target, List<Vector2Int> path,
+            Vector2Int? threat = null, IReadOnlyList<Vector2> threats = null)
         {
             // 제한된 지역 배열과 비용 우선 탐색 큐 준비
             path.Clear();
@@ -202,6 +254,8 @@ namespace RotWorld
             int destination = -1;
             int candidates = 0;
             float bestEscapeScore = 0f;
+            Vector2 escapeDirection = threat.HasValue ? FindEscapeDirection(start, threat.Value, threats) : Vector2.zero;
+            float initialThreatDistance = threat.HasValue ? NearestThreatDistance(start, start, threat.Value, threats) : 0f;
 
             while (frontier.Count > 0)
             {
@@ -210,7 +264,7 @@ namespace RotWorld
                 var tile = start + new Vector2Int(node.Index % Width - Radius, node.Index / Width - Radius);
 
                 // 안전 거리에 도달하는 최저 비용 타일에서 도주 구간 종료
-                if (threat.HasValue && (tile - threat.Value).sqrMagnitude >= UnitSight.FleeReleaseRadius * UnitSight.FleeReleaseRadius)
+                if (threat.HasValue && NearestThreatDistance(tile, tile, threat.Value, threats) >= UnitSight.FleeReleaseRadius)
                 {
                     destination = node.Index;
                     break;
@@ -234,20 +288,18 @@ namespace RotWorld
                     }
                 }
 
-                // 반대 방향 진행과 위협과의 거리 증가를 우선하고 긴 우회 경로 감점
+                // 좀비가 없는 방향 진행과 전체 위협의 최소 거리 증가 우선
                 if (threat.HasValue)
                 {
                     const float DistanceWeight = .25f;
                     const float CostPenalty = .2f;
-                    Vector2 away = (Vector2)(start - threat.Value);
                     Vector2 displacement = (Vector2)(tile - start);
-                    float score = Vector2.Dot(displacement, away.normalized) +
-                        ((Vector2)(tile - threat.Value)).magnitude * DistanceWeight - node.Cost * CostPenalty;
-                    float initialScore = away.magnitude * DistanceWeight;
+                    float score = Vector2.Dot(displacement, escapeDirection) +
+                        (NearestThreatDistance(tile, tile, threat.Value, threats) - initialThreatDistance) * DistanceWeight - node.Cost * CostPenalty;
 
-                    if (node.Index != center && score - initialScore > bestEscapeScore)
+                    if (node.Index != center && score > bestEscapeScore)
                     {
-                        bestEscapeScore = score - initialScore;
+                        bestEscapeScore = score;
                         destination = node.Index;
                     }
                 }
@@ -271,14 +323,26 @@ namespace RotWorld
                             continue;
                         }
 
-                        // 도주 경로에서 좀비에게 가까워지는 구간 제외
-                        if (threat.HasValue && (next - threat.Value).sqrMagnitude < (tile - threat.Value).sqrMagnitude)
+                        // 빈 방향 우회를 허용하되 좀비 몸체로 접근하는 구간 차단 및 근접 비용 가산
+                        float dangerCost = 0f;
+
+                        if (threat.HasValue)
                         {
-                            continue;
+                            const float MinimumThreatClearance = 1f;
+                            const float DangerWeight = 4f;
+                            float clearance = NearestThreatDistance(tile, next, threat.Value, threats);
+
+                            if (clearance < MinimumThreatClearance &&
+                                clearance < NearestThreatDistance(tile, tile, threat.Value, threats))
+                            {
+                                continue;
+                            }
+
+                            dangerCost = DangerWeight / (1f + clearance * clearance);
                         }
 
                         int index = y * Width + x;
-                        float cost = node.Cost + (isDiagonal ? DiagonalDistance : 1f) / SpeedMultiplier(map, next);
+                        float cost = node.Cost + (isDiagonal ? DiagonalDistance : 1f) * (1f / SpeedMultiplier(map, next) + dangerCost);
 
                         if (cost >= costs[index])
                         {
