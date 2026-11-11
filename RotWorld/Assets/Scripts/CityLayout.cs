@@ -487,9 +487,9 @@ namespace RotWorld
 
             foreach (int index in candidates)
             {
-                if (TryBuilding(new RectInt(index % mapSize - size.x / 2, index / mapSize - size.y / 2, size.x, size.y), region, kind, region == CityRegion.Villages
-                    ? 4
-                    : 2))
+                if (TryBuilding(new RectInt(index % mapSize - size.x / 2, index / mapSize - size.y / 2, size.x, size.y), region, kind, region == CityRegion.Downtown ? 5 : region == CityRegion.Villages
+                    ? 10
+                    : 15))
                 {
                     return;
                 }
@@ -1027,7 +1027,7 @@ namespace RotWorld
                         int index = candidates[(i + pass * 17) % candidates.Count];
                         var size = BuildingSize(region, pass == 1);
                         var bounds = new RectInt(index % mapSize - size.x / 2, index / mapSize - size.y / 2, size.x, size.y);
-                        int gap = region == CityRegion.Downtown ? 1 : region == CityRegion.Villages ? 4 : 2;
+                        int gap = region == CityRegion.Downtown ? 5 : region == CityRegion.Villages ? 7 : 10;
                         int kind = region == CityRegion.Industrial ? 2 : region == CityRegion.Downtown ? 3
                             : region == CityRegion.Riverside ? 4 : region == CityRegion.Villages ? 0 : layoutRandom.Next(2);
 
@@ -1067,7 +1067,7 @@ namespace RotWorld
                                 continue;
                             }
 
-                            populated = TryBuilding(new RectInt(x, y, 4, 5), CityRegion.Villages, 0, 3);
+                            populated = TryBuilding(new RectInt(x, y, 4, 5), CityRegion.Villages, 0, 10);
                         }
                     }
                 }
