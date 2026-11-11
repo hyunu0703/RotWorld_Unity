@@ -11,7 +11,8 @@ namespace RotWorld
     {
         // 도로 폭과 수변 및 출입 통로 제한
         private const int MainWidth = 6;
-        private const int LocalWidth = 4;
+        private const int LocalWidth = MainWidth;
+        private const int PavementWidth = 1;
         private const int BankBuffer = 3;
         private const int MaxEntranceLength = 32;
 
@@ -908,7 +909,10 @@ namespace RotWorld
         // 육지와 승인된 교량에만 도로 폭 기록
         private void PaintRoad(Vector2Int point, int width)
         {
-            // 도로 폭 내부의 승인된 육지에 차도와 인도 구분 기록
+            // 타일 중심 거리로 방향에 무관한 차도와 인도 반경 계산
+            float radius = width * .5f;
+            float roadRadius = radius - PavementWidth;
+            float centerOffset = (width % 2 == 0) ? .5f : 0f;
             int low = -width / 2;
             int high = width + low;
 
@@ -916,6 +920,16 @@ namespace RotWorld
             {
                 for (int dx = low; dx < high; dx++)
                 {
+                    float offsetX = dx + centerOffset;
+                    float offsetY = dy + centerOffset;
+                    float distanceSquared = offsetX * offsetX + offsetY * offsetY;
+
+                    if (distanceSquared > radius * radius)
+                    {
+                        continue;
+                    }
+
+                    // 기존 지형과 교량 보존 후 원형 범위의 육지에만 타일 적용
                     int i = (point.y + dy) * mapSize + point.x + dx;
 
                     if (mapData.Terrain[i] == CityGenerator.River && mapData.Tiles[i] == CityGenerator.Bridge)
@@ -928,11 +942,11 @@ namespace RotWorld
                         continue;
                     }
 
-                    bool edge = dx == low || dx == high - 1 || dy == low || dy == high - 1;
+                    bool isPavement = distanceSquared > roadRadius * roadRadius;
 
                     if (mapData.Tiles[i] != CityGenerator.Road)
                     {
-                        mapData.Tiles[i] = edge ? CityGenerator.Pavement : CityGenerator.Road;
+                        mapData.Tiles[i] = isPavement ? CityGenerator.Pavement : CityGenerator.Road;
                     }
                 }
             }
