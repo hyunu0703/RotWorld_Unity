@@ -11,7 +11,7 @@ namespace RotWorld
         // 유형별 기본 능력치와 개체 속도 편차
         [SerializeField] private float humanSpeed = 1.8f;
         [SerializeField] private float zombieSpeed = 1.2f;
-        [SerializeField] private float zombieChaseSpeed = 2.0f;
+        [SerializeField] private float zombieChaseSpeed = 1.85f;
         private const float MinimumSpeedVariation = .85f;
         private const float MaximumSpeedVariation = 1.15f;
         private const float MinimumRest = 1f;
@@ -45,7 +45,7 @@ namespace RotWorld
         private bool isDirectPursuit;
         private Vector2? wanderExitTarget;
         internal const float SeparationDistance = .9f;
-        private const float PursuitSpeedAdvantage = 1.25f;
+        private const float PursuitSpeedAdvantage = 1.10f;
         private const float MaximumSubstep = .1f;
         private readonly List<Vector2Int> reservations = new List<Vector2Int>();
 
