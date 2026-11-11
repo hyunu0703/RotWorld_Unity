@@ -17,6 +17,8 @@ namespace RotWorld
         private SpriteRenderer visual;
         private Sprite[] frames;
         private float distance;
+        private float knockbackHeight;
+        private Vector2 attackOffset;
 
         // 지도 표시에서 소유하는 공용 스프라이트와 개체 렌더러 연결
         public void Initialize(SpriteRenderer visual, Sprite[] frames)
@@ -42,7 +44,7 @@ namespace RotWorld
             if (direction.x != 0f)
             {
                 visual.flipX = direction.x < 0f;
-                visual.transform.localPosition = visual.flipX ? Vector3.right * MirrorOffset : Vector3.zero;
+                ApplyVisualPosition();
             }
 
             // 스프라이트 교체만 사용해 원본 머리와 몸통의 픽셀 크기 유지
@@ -64,7 +66,40 @@ namespace RotWorld
         public void SetAttackOffset(Vector2 offset)
         {
             // 좌우 반전 기준 위치에 공격 모션만 합성
-            visual.transform.localPosition = (visual.flipX ? Vector3.right * MirrorOffset : Vector3.zero) + (Vector3)offset;
+            attackOffset = offset;
+            ApplyVisualPosition();
+        }
+
+
+        // 지면 좌표와 독립된 피격 도약 높이 표시
+        public void SetKnockbackHeight(float height)
+        {
+            // 원본 스프라이트를 변형하지 않고 수직 표시 위치만 이동
+            knockbackHeight = Mathf.Max(0f, height);
+            ApplyVisualPosition();
+        }
+
+
+        // 방향 반전과 공격 및 공중 오프셋 합성
+        private void ApplyVisualPosition()
+        {
+            // 추적과 충돌에 사용하는 부모 지면 좌표 유지
+            visual.transform.localPosition = (visual.flipX ? Vector3.right * MirrorOffset : Vector3.zero) +
+                (Vector3)attackOffset + Vector3.up * knockbackHeight;
+        }
+
+
+        // 비활성화 시 시각 오프셋 복원
+        private void OnDisable()
+        {
+            // 중단된 피격 도약이 표시 위치에 남지 않도록 정리
+            knockbackHeight = 0f;
+            attackOffset = Vector2.zero;
+
+            if (visual != null)
+            {
+                ApplyVisualPosition();
+            }
         }
 
 

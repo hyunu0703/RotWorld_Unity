@@ -55,11 +55,14 @@ namespace RotWorld
         private bool hasBeenHit;
         private float knockbackRemaining;
         private int knockbackFinishedFrame = -1;
-        public bool HasResumedAfterKnockback => knockbackRemaining <= 0f && Time.frameCount > knockbackFinishedFrame + 1;
+        public bool HasResumedAfterKnockback => knockbackElapsed >= KnockbackDuration && Time.frameCount > knockbackFinishedFrame + 1;
         private Vector2 knockbackDirection;
+        private Vector2 knockbackOrigin;
         private const float InjuredSpeedMultiplier = .8f;
-        private const float KnockbackSpeed = 5f;
-        private const float KnockbackDistance = .3f;
+        private const float KnockbackDuration = .28f;
+        private const float KnockbackHeight = .35f;
+        private float knockbackElapsed = KnockbackDuration;
+        private const float KnockbackDistance = 1f;
         public Vector2 Position => position;
 
         // 기존 인구 데이터와 이동 및 걷기 표시 연결
@@ -112,7 +115,7 @@ namespace RotWorld
                 return;
             }
 
-            if (knockbackRemaining > 0f)
+            if (knockbackElapsed < KnockbackDuration)
             {
                 UpdateKnockback();
                 return;
@@ -323,7 +326,7 @@ namespace RotWorld
         public bool TryGrab(UnitCombat owner)
         {
             // 기존 소유자와 넉백 중 재포획 및 비활성 대상 거부
-            if (isZombie || !isActiveAndEnabled || owner == null || IsGrabbed || knockbackRemaining > 0f)
+            if (isZombie || !isActiveAndEnabled || owner == null || IsGrabbed || knockbackElapsed < KnockbackDuration)
             {
                 return false;
             }
@@ -374,27 +377,60 @@ namespace RotWorld
             pathIndex = 0;
             hasChasePath = false;
             knockbackDirection = direction.sqrMagnitude > 0f ? direction.normalized : Vector2.right;
+            knockbackOrigin = position;
             knockbackRemaining = KnockbackDistance;
+            knockbackElapsed = 0f;
+            walkAnimation.SetKnockbackHeight(0f);
             knockbackFinishedFrame = -1;
             combat.FlashHit();
             walkAnimation.Stop();
         }
 
 
-        // 장애물과 유닛을 관통하지 않는 넉백 이동
+        // 포물선 피격 도약과 장애물을 관통하지 않는 지면 넉백
         private void UpdateKnockback()
         {
-            // 설정된 넉백 거리만 소비하고 막힌 위치에서 중단
-            float remaining = Mathf.Min(knockbackRemaining, KnockbackSpeed * Time.deltaTime);
+            // 피격 시작점에서 계산한 절대 목표 거리로 프레임별 누적 오차 방지
+            knockbackElapsed = Mathf.Min(KnockbackDuration, knockbackElapsed + Time.deltaTime);
+            float progress = knockbackElapsed / KnockbackDuration;
+            float desiredDistance = EvaluateKnockbackDistance(progress);
+            float travelled = KnockbackDistance - knockbackRemaining;
+            walkAnimation.SetKnockbackHeight(4f * KnockbackHeight * progress * (1f - progress));
 
-            while (remaining > 0f)
+            while (desiredDistance - travelled > .00001f)
             {
-                float step = Mathf.Min(remaining, MaximumSubstep);
-                Vector2 next = position + knockbackDirection * step;
+                float step = Mathf.Min(desiredDistance - travelled, MaximumSubstep);
+                Vector2 next = knockbackOrigin + knockbackDirection * (travelled + step);
 
                 if (!CanPursueStep(next))
                 {
-                    knockbackRemaining = 0f;
+                    // 한 번 막혀도 남은 거리를 버리지 않고 충돌 경계까지 안전하게 접근
+                    const int BoundaryIterations = 10;
+                    float low = 0f;
+                    float high = step;
+
+                    for (int i = 0; i < BoundaryIterations; i++)
+                    {
+                        float middle = (low + high) * .5f;
+                        Vector2 candidate = knockbackOrigin + knockbackDirection * (travelled + middle);
+
+                        if (CanPursueStep(candidate))
+                        {
+                            low = middle;
+                        }
+                        else
+                        {
+                            high = middle;
+                        }
+                    }
+
+                    step = low;
+                    next = knockbackOrigin + knockbackDirection * (travelled + step);
+                }
+
+                if (step <= .00001f)
+                {
+                    // 일시적인 유닛 방해는 다음 프레임에 남은 목표 거리로 재시도
                     break;
                 }
 
@@ -402,11 +438,10 @@ namespace RotWorld
                 currentTile = Vector2Int.RoundToInt(next);
                 map.OccupyTile(currentTile);
                 position = next;
-                remaining -= step;
-                knockbackRemaining = Mathf.Max(0f, knockbackRemaining - step);
+                travelled += step;
+                knockbackRemaining = Mathf.Max(0f, KnockbackDistance - travelled);
             }
-
-            if (knockbackRemaining <= 0f)
+            if (knockbackElapsed >= KnockbackDuration)
             {
                 knockbackFinishedFrame = Time.frameCount;
             }
@@ -417,6 +452,15 @@ namespace RotWorld
             detectionRemaining = 0f;
             restRemaining = 0f;
         }
+
+        // 피격 시작점 기준 감속 넉백 목표 거리 계산
+        internal static float EvaluateKnockbackDistance(float progress)
+        {
+            // 착지 시 설정 거리 전체를 목표로 지정
+            float remaining = 1f - Mathf.Clamp01(progress);
+            return KnockbackDistance * (1f - remaining * remaining);
+        }
+
 
         // 지형과 개체 편차 반영 후 인간보다 빠른 추적 속도 계산
         internal static float CalculatePursuitSpeed(float configuredSpeed, float humanActualSpeed)
