@@ -5,13 +5,14 @@ using UnityEngine.InputSystem;
 namespace RotWorld
 {
     /// <summary>
-    /// 도시 데이터를 정사각형 픽셀 원본으로 표시하고 정수 줌과 이동 제공
+    /// 도시 데이터를 정사각형 픽셀 원본으로 표시하고 단계별 줌과 이동 제공
     /// </summary>
     public sealed class CityMapView : MonoBehaviour
     {
-        // 지도 표시 해상도와 정수 줌 범위
+        // 지도 표시 해상도와 전체 보기 전환 단계
         public const int PixelsPerTile = 8;
-        private const int MaxZoom = 6;
+        private const int OverviewTransitionSteps = 4;
+        private const int MaxZoom = 6 + OverviewTransitionSteps - 1;
         private const int MaximumOverviewSize = 256;
         private const int ToolbarHeightAllowance = 100;
         private const float OverviewMarginScale = 1.12f;
@@ -257,7 +258,7 @@ namespace RotWorld
         }
 
 
-        // 정수 배율 변경
+        // 전체 보기 중간 단계와 상세 배율 변경
         public void ChangeZoom(int delta)
         {
             // 지원 배율 범위로 보정한 뒤 카메라 갱신
@@ -280,7 +281,7 @@ namespace RotWorld
         }
 
 
-        // 화면 높이에서 정수 픽셀 배율 도출
+        // 화면 높이에서 전체 보기와 상세 보기 배율 도출
         private void UpdateCamera()
         {
             // 연결된 카메라 확인 후 줌 단계별 픽셀 배율 결정
@@ -289,15 +290,18 @@ namespace RotWorld
                 return;
             }
 
-            float pixelsPerUnit = PixelsPerTile * Mathf.Max(1, zoom);
+            int detailZoom = Mathf.Max(1, zoom - OverviewTransitionSteps + 1);
+            float pixelsPerUnit = PixelsPerTile * detailZoom;
 
-            // 전체 보기 단계에서는 간소화 지도와 화면 여백 기준 배율 사용
-            if (mapData != null && zoom == 0)
+            // 전체 보기와 상세 원본 사이에 동일 비율의 중간 확대 단계 적용
+            if (mapData != null && zoom < OverviewTransitionSteps)
             {
                 int availableHeight = Mathf.Max(1, viewCamera.pixelHeight - ToolbarHeightAllowance);
                 int overviewScale = Mathf.Max(1, Mathf.FloorToInt(Mathf.Min(viewCamera.pixelWidth, availableHeight) / (overviewTexture.width * OverviewMarginScale)));
-                pixelsPerUnit = overviewScale * overviewPixelsPerUnit;
-                spriteRenderer.sprite = overviewSprite;
+                float overviewDisplayScale = overviewScale * overviewPixelsPerUnit;
+                float transitionProgress = zoom / (float)OverviewTransitionSteps;
+                pixelsPerUnit = overviewDisplayScale * Mathf.Pow(PixelsPerTile / overviewDisplayScale, transitionProgress);
+                spriteRenderer.sprite = zoom == 0 ? overviewSprite : mapSprite;
             }
             else if (spriteRenderer != null)
             {
@@ -353,7 +357,20 @@ namespace RotWorld
 
             if (!overUi && mouse.scroll.ReadValue().y != 0)
             {
+                // 드래그 결과 반영 후 커서 아래의 줌 이전 지도 좌표 저장
+                UpdateCamera();
+                Vector2 cursorPosition = mouse.position.ReadValue();
+                Vector2 anchorBeforeZoom = viewCamera.ScreenToWorldPoint(cursorPosition);
+                int previousZoom = zoom;
                 ChangeZoom(mouse.scroll.ReadValue().y > 0 ? 1 : -1);
+
+                // 실제 배율 변경 시 커서 아래 좌표 차이만큼 카메라 중심 보정
+                if (zoom != previousZoom)
+                {
+                    Vector2 anchorAfterZoom = viewCamera.ScreenToWorldPoint(cursorPosition);
+                    viewCenter = (Vector2)viewCamera.transform.position + anchorBeforeZoom - anchorAfterZoom;
+                    UpdateCamera();
+                }
             }
         }
 
