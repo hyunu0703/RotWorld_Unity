@@ -38,6 +38,7 @@ namespace RotWorld
         private bool hasHit;
         private bool isCooperativeAttack;
         private Vector2 attackDirection;
+        internal bool IsHumanAttackReady => !isZombie && !isAttacking && cooldown <= 0f;
         internal bool CanMoveDuringAttack => isAttacking && isCooperativeAttack && !hasHit && attackTime < Windup;
         public bool BlocksMovement => (isAttacking && !CanMoveDuringAttack) || pursuitDelayRemaining > 0f;
         private float AttackRange => isZombie ? GrabRange : HumanAttackRange;
@@ -78,7 +79,7 @@ namespace RotWorld
         public bool TryAttackZombie(Vector2 position, UnitWander requiredTarget = null)
         {
             // 좀비 개체와 공격 진행 및 재공격 대기 중에는 탐색 생략
-            if (isZombie || isAttacking || cooldown > 0f)
+            if (!IsHumanAttackReady)
             {
                 return false;
             }
@@ -126,6 +127,8 @@ namespace RotWorld
             }
 
             isCooperativeSupport = isSupport;
+
+            // 남은 대기를 0초로 제거해 사거리와 행동 조건 충족 시 즉시 공격 허용
             cooldown = 0f;
         }
 

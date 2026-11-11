@@ -56,6 +56,22 @@ namespace RotWorld
         private UnitWander cooperativeLeader;
         private UnitWander cooperativeZombie;
 
+        // 원형 도주의 장애물 사전 감지와 회피 방향 고정 및 안전 거리
+        private const float OrbitObstacleMargin = .35f;
+        private const float OrbitObstacleLookAhead = .9f;
+        private const float OrbitObstacleReleaseDistance = .75f;
+        private const float OrbitAvoidanceReleaseTravel = 1.25f;
+        private bool isOrbitAvoidingObstacle;
+        private float orbitAvoidanceTravelled;
+
+        // 지원자의 지정 좀비 이동 관측과 제한된 시간의 가로채기 예측
+        private const float MaximumInterceptTime = 1.5f;
+        private const float MaximumMotionSampleInterval = .5f;
+        private const float InterceptCalculationTolerance = .0001f;
+        private Vector2 cooperativePreviousZombiePosition;
+        private Vector2 cooperativeZombieVelocity;
+        private float cooperativeMotionSampleTime;
+
         // 이동 중 출발 및 도착과 대각선 교차 영역 예약
         private bool isDirectPursuit;
         private Vector2? wanderExitTarget;
@@ -236,10 +252,16 @@ namespace RotWorld
                 return;
             }
 
+            // 도주자의 공격 대기 중 원형 이동 점유를 정리하고 기존 도주 경로 재계산
+            if (cooperativeHelper != null && isDirectPursuit && !combat.IsHumanAttackReady)
+            {
+                ResetCooperativeMovement();
+            }
+
             UpdateReaction();
 
-            // 합동 공격 도주자는 지원자의 현재 위치를 중심으로 원형 도주
-            if (cooperativeHelper != null)
+            // 합동 공격 도주자는 공격 가능한 상태에서만 지원자 중심 원형 이동
+            if (cooperativeHelper != null && combat.IsHumanAttackReady)
             {
                 UpdateCooperativeOrbit();
                 return;
@@ -394,8 +416,9 @@ namespace RotWorld
                 }
             }
 
-            // 연속 추격 중에는 감지만 갱신하고 타일 경로 교체 생략
-            if ((isZombie && (isDirectPursuit || chaseTarget >= 0)) || cooperativeLeader != null || cooperativeHelper != null)
+            // 지원자 추격과 공격 가능한 도주자의 원형 이동만 일반 타일 경로 교체 생략
+            if ((isZombie && (isDirectPursuit || chaseTarget >= 0)) || cooperativeLeader != null ||
+                (cooperativeHelper != null && combat.IsHumanAttackReady))
             {
                 return;
             }
@@ -517,10 +540,15 @@ namespace RotWorld
             cooperativeZombie = pursuer;
             helper.cooperativeLeader = this;
             helper.cooperativeZombie = pursuer;
+            helper.cooperativePreviousZombiePosition = pursuer.position;
+            helper.cooperativeZombieVelocity = Vector2.zero;
+            helper.cooperativeMotionSampleTime = Time.time;
             Vector2 radial = position - helper.position;
             Vector2 tangent = new Vector2(-radial.y, radial.x);
             cooperativeOrbitDirection = Vector2.Dot(tangent, position - pursuer.position) >= 0f ? 1f : -1f;
             cooperativeOrbitAngle = Mathf.Atan2(radial.y, radial.x);
+            isOrbitAvoidingObstacle = false;
+            orbitAvoidanceTravelled = 0f;
             combat.CancelAttack();
             helper.combat.CancelAttack();
 
@@ -580,6 +608,11 @@ namespace RotWorld
             {
                 leader.StopCooperativeAttack();
             }
+            else if (cooperativeLeader != null)
+            {
+                // 공격 회복과 붙잡힘 중에도 실제 이동을 관측해 재접근 시 과거 속도 사용 방지
+                UpdateCooperativeTargetMotion();
+            }
         }
 
 
@@ -599,6 +632,7 @@ namespace RotWorld
 
             helper.cooperativeLeader = null;
             helper.cooperativeZombie = null;
+            helper.cooperativeZombieVelocity = Vector2.zero;
             helper.combat.CancelAttack();
 
             // 지원 종료 시 재공격 간격 5초 복구 및 남은 쿨타임 제거
@@ -616,6 +650,8 @@ namespace RotWorld
             currentTile = Vector2Int.RoundToInt(position);
             map.OccupyTile(currentTile);
             isDirectPursuit = false;
+            isOrbitAvoidingObstacle = false;
+            orbitAvoidanceTravelled = 0f;
             path.Clear();
             pathIndex = 0;
             hasChasePath = false;
@@ -638,6 +674,10 @@ namespace RotWorld
                 path.Clear();
                 pathIndex = 0;
                 hasChasePath = false;
+
+                // 쿨타임 중 일반 도주로 달라진 위치에서 원형 회전 각도 재설정
+                Vector2 radial = position - cooperativeHelper.position;
+                cooperativeOrbitAngle = Mathf.Atan2(radial.y, radial.x);
             }
 
             Vector2 center = cooperativeHelper.position;
@@ -657,34 +697,74 @@ namespace RotWorld
                     radial = radial.sqrMagnitude > 0f ? radial : Vector2.right;
                 }
 
-                // 같은 회전 방향의 안쪽 우회 우선 및 모두 막힌 경우에만 방향 반전
-                const int OrbitAttempts = 4;
+                // 앞쪽 지형이 막힐 때 한 번만 반전하고 장애물 이탈 전까지 방향 고정
+                float forwardAngle = cooperativeOrbitAngle + cooperativeOrbitDirection * step / CooperativeOrbitRadius;
+                Vector2 forward = CalculateCooperativeOrbitStep(position, center, step, forwardAngle, CooperativeOrbitRadius) - position;
+                bool isAheadClear = HasOrbitTerrainClearance(position, position + forward.normalized * OrbitObstacleLookAhead, OrbitObstacleMargin);
+
+                if (isOrbitAvoidingObstacle)
+                {
+                    if (orbitAvoidanceTravelled >= OrbitAvoidanceReleaseTravel &&
+                        GetOrbitObstacleDistance(position) >= OrbitObstacleReleaseDistance && isAheadClear)
+                    {
+                        isOrbitAvoidingObstacle = false;
+                    }
+                }
+                else if (!isAheadClear)
+                {
+                    cooperativeOrbitDirection = -cooperativeOrbitDirection;
+                    cooperativeOrbitAngle = Mathf.Atan2(radial.y, radial.x);
+                    isOrbitAvoidingObstacle = true;
+                    orbitAvoidanceTravelled = 0f;
+                }
+
+                // 회피 중 접선 우선으로 벽에서 벗어나고 일반 이동은 원주 우선으로 탐색
+                const int OrbitRadiusAttempts = 4;
+                const int OrbitSteeringAttempts = 5;
                 const float InnerOrbitScale = .75f;
+                const float SteeringAngle = 30f;
                 bool canMove = false;
                 Vector2 next = position;
                 float nextAngle = cooperativeOrbitAngle;
+                Vector2 tangent = new Vector2(-radial.y, radial.x).normalized * cooperativeOrbitDirection;
 
-                for (int attempt = 0; attempt < OrbitAttempts; attempt++)
+                for (int attempt = 0; attempt < OrbitRadiusAttempts + OrbitSteeringAttempts; attempt++)
                 {
-                    float rotation = cooperativeOrbitDirection * (attempt < 2 ? 1f : -1f);
-                    float radius = attempt % 2 == 0 ? CooperativeOrbitRadius : Mathf.Max(SeparationDistance, Mathf.Min(radial.magnitude, CooperativeOrbitRadius) * InnerOrbitScale);
+                    float startAngle = isOrbitAvoidingObstacle ? Mathf.Atan2(radial.y, radial.x) : cooperativeOrbitAngle;
+                    float angle = Mathf.Repeat(startAngle + cooperativeOrbitDirection * step / CooperativeOrbitRadius, Mathf.PI * 2f);
+                    Vector2 candidate;
 
-                    // 지원자 이동과 무관한 회전 위상 유지 및 장애물에 의한 반전 시 현재 각도부터 재시작
-                    float startAngle = attempt < 2 ? cooperativeOrbitAngle : Mathf.Atan2(radial.y, radial.x);
-                    float angle = Mathf.Repeat(startAngle + rotation * step / CooperativeOrbitRadius, Mathf.PI * 2f);
-                    Vector2 candidate = CalculateCooperativeOrbitStep(position, center, step, angle, radius);
+                    bool isSteeringCandidate = isOrbitAvoidingObstacle ? attempt < OrbitSteeringAttempts : attempt >= OrbitRadiusAttempts;
 
-                    // 시작 시 4타일 밖이면 범위 복귀 우선 및 범위 안에서는 이탈 차단
+                    if (!isSteeringCandidate)
+                    {
+                        int radiusAttempt = isOrbitAvoidingObstacle ? attempt - OrbitSteeringAttempts : attempt;
+                        float radius = radiusAttempt == 0 ? CooperativeOrbitRadius : Mathf.Max(SeparationDistance,
+                            Mathf.Min(radial.magnitude, CooperativeOrbitRadius) * Mathf.Pow(InnerOrbitScale, radiusAttempt));
+                        candidate = CalculateCooperativeOrbitStep(position, center, step, angle, radius);
+                    }
+                    else
+                    {
+                        // 같은 회전 방향을 유지하는 접선 기준 좌우 최대 60도 우회
+                        int steering = isOrbitAvoidingObstacle ? attempt : attempt - OrbitRadiusAttempts;
+                        float offset = (steering % 2 == 0 ? -1f : 1f) * ((steering + 1) / 2) * SteeringAngle * Mathf.Deg2Rad;
+                        Vector2 heading = new Vector2(tangent.x * Mathf.Cos(offset) - tangent.y * Mathf.Sin(offset),
+                            tangent.x * Mathf.Sin(offset) + tangent.y * Mathf.Cos(offset));
+                        candidate = position + heading * step;
+                        angle = Mathf.Atan2(candidate.y - center.y, candidate.x - center.x);
+                    }
+
+                    // 반대 회전으로 되돌아가는 후보와 원 범위 이탈 및 안전 거리 침범 제외
                     float allowedRadius = Mathf.Max(CooperativeOrbitRadius, Vector2.Distance(position, center));
 
-                    if (Vector2.Distance(candidate, center) > allowedRadius + OrbitDistanceTolerance || !CanPursueStep(candidate))
+                    if (Vector2.Dot(candidate - position, tangent) < -OrbitDistanceTolerance ||
+                        Vector2.Distance(candidate, center) > allowedRadius + OrbitDistanceTolerance || !IsOrbitStepSafe(candidate))
                     {
                         continue;
                     }
 
                     next = candidate;
                     nextAngle = angle;
-                    cooperativeOrbitDirection = rotation;
                     canMove = true;
                     break;
                 }
@@ -703,6 +783,12 @@ namespace RotWorld
                 position = next;
                 cooperativeOrbitAngle = nextAngle;
                 travelled += distance;
+
+                if (isOrbitAvoidingObstacle)
+                {
+                    orbitAvoidanceTravelled += distance;
+                }
+
                 remaining = Mathf.Max(0f, remaining - step);
             }
 
@@ -720,6 +806,90 @@ namespace RotWorld
             {
                 walkAnimation.Stop();
             }
+        }
+
+
+        // 원형 도주의 실제 충돌과 장애물 여유 거리 및 앞쪽 안전 구간 확인
+        private bool IsOrbitStepSafe(Vector2 candidate)
+        {
+            // 지형 관통과 유닛 겹침은 기존 충돌 검사로 차단
+            if (!CanPursueStep(candidate))
+            {
+                return false;
+            }
+
+            Vector2 heading = (candidate - position).normalized;
+            Vector2 ahead = candidate + heading * OrbitObstacleLookAhead;
+
+            if (HasOrbitTerrainClearance(position, candidate, OrbitObstacleMargin) &&
+                HasOrbitTerrainClearance(candidate, ahead, OrbitObstacleMargin))
+            {
+                return true;
+            }
+
+            // 이미 안전 거리 안에 들어온 경우 장애물에서 멀어지는 탈출 이동만 허용
+            float currentDistance = GetOrbitObstacleDistance(position);
+            return currentDistance < OrbitObstacleMargin &&
+                GetOrbitObstacleDistance(candidate) > currentDistance + OrbitDistanceTolerance;
+        }
+
+
+        // 몸체 이동 영역에 여유 폭을 더해 건물과 통행 불가 지형의 사전 접근 차단
+        private bool HasOrbitTerrainClearance(Vector2 from, Vector2 to, float margin)
+        {
+            // 기존 몸체 경계를 확장한 이동 영역과 지도 경계 및 모든 장애물 타일 검사
+            Rect body = UnitWalkAnimation.BodyBounds;
+            int minX = Mathf.FloorToInt(Mathf.Min(from.x, to.x) + body.xMin - margin);
+            int maxX = Mathf.CeilToInt(Mathf.Max(from.x, to.x) + body.xMax + margin) - 1;
+            int minY = Mathf.FloorToInt(Mathf.Min(from.y, to.y) + body.yMin - margin);
+            int maxY = Mathf.CeilToInt(Mathf.Max(from.y, to.y) + body.yMax + margin) - 1;
+
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                {
+                    if (!UnitPathfinder.CanOccupy(map, new Vector2Int(x, y)))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+
+        // 장애물 이탈 판단과 밀착 상태 탈출에 사용할 몸체 기준 최단 거리 조회
+        private float GetOrbitObstacleDistance(Vector2 point)
+        {
+            // 회피 해제 거리 안의 통행 불가 타일과 지도 밖 영역을 장애물로 취급
+            Rect body = UnitWalkAnimation.BodyBounds;
+            float left = point.x + body.xMin;
+            float right = point.x + body.xMax;
+            float bottom = point.y + body.yMin;
+            float top = point.y + body.yMax;
+            float nearest = OrbitObstacleReleaseDistance;
+            int minX = Mathf.FloorToInt(left - OrbitObstacleReleaseDistance);
+            int maxX = Mathf.FloorToInt(right + OrbitObstacleReleaseDistance);
+            int minY = Mathf.FloorToInt(bottom - OrbitObstacleReleaseDistance);
+            int maxY = Mathf.FloorToInt(top + OrbitObstacleReleaseDistance);
+
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                {
+                    if (UnitPathfinder.CanOccupy(map, new Vector2Int(x, y)))
+                    {
+                        continue;
+                    }
+
+                    float dx = Mathf.Max(0f, Mathf.Max(x - right, left - (x + 1f)));
+                    float dy = Mathf.Max(0f, Mathf.Max(y - top, bottom - (y + 1f)));
+                    nearest = Mathf.Min(nearest, Mathf.Sqrt(dx * dx + dy * dy));
+                }
+            }
+
+            return nearest;
         }
 
 
@@ -1184,7 +1354,81 @@ namespace RotWorld
         }
 
 
-        // 좀비의 인간 추격과 지원자의 지정 좀비 추격을 위한 연속 이동
+        // 지정 좀비의 실제 위치 변화에서 가로채기 예측용 속도 갱신
+        private void UpdateCooperativeTargetMotion()
+        {
+            // 같은 프레임의 중복 표본 제외 및 긴 관측 공백의 속도 폐기
+            float elapsed = Time.time - cooperativeMotionSampleTime;
+
+            if (elapsed <= 0f)
+            {
+                return;
+            }
+
+            cooperativeZombieVelocity = elapsed <= MaximumMotionSampleInterval
+                ? (cooperativeZombie.position - cooperativePreviousZombiePosition) / elapsed : Vector2.zero;
+            cooperativePreviousZombiePosition = cooperativeZombie.position;
+            cooperativeMotionSampleTime = Time.time;
+        }
+
+
+        // 지원자 속도와 좀비 이동 방향을 사용한 공격 사거리 도달 예상 지점 조회
+        private Vector2 FindCooperativeInterceptPosition(float speed)
+        {
+            // 근접 공격 중과 정지 및 넉백 상태에서는 현재 위치 추적
+            Vector2 target = cooperativeZombie.position;
+            Vector2 relative = target - position;
+
+            if (speed <= 0f || relative.sqrMagnitude <= UnitCombat.HumanAttackRange * UnitCombat.HumanAttackRange ||
+                combat.CanMoveDuringAttack || cooperativeZombie.combat.BlocksMovement ||
+                cooperativeZombie.knockbackElapsed < KnockbackDuration || cooperativeZombieVelocity.sqrMagnitude <= InterceptCalculationTolerance)
+            {
+                return target;
+            }
+
+            // 좀비 예상 위치까지의 거리와 지원자 이동 거리 및 공격 사거리의 교차 시간 계산
+            float attackRange = UnitCombat.HumanAttackRange;
+            float a = cooperativeZombieVelocity.sqrMagnitude - speed * speed;
+            float b = 2f * (Vector2.Dot(relative, cooperativeZombieVelocity) - attackRange * speed);
+            float c = relative.sqrMagnitude - attackRange * attackRange;
+            float interceptTime = MaximumInterceptTime;
+
+            if (Mathf.Abs(a) <= InterceptCalculationTolerance)
+            {
+                if (b < -InterceptCalculationTolerance)
+                {
+                    interceptTime = -c / b;
+                }
+            }
+            else
+            {
+                float discriminant = b * b - 4f * a * c;
+
+                if (discriminant >= 0f)
+                {
+                    float root = Mathf.Sqrt(discriminant);
+                    float first = (-b - root) / (2f * a);
+                    float second = (-b + root) / (2f * a);
+
+                    if (first >= 0f)
+                    {
+                        interceptTime = first;
+                    }
+
+                    if (second >= 0f)
+                    {
+                        interceptTime = first >= 0f ? Mathf.Min(first, second) : second;
+                    }
+                }
+            }
+
+            // 원형 도주의 방향 전환을 고려한 예측 시간 제한 및 지형 관통 예측 폐기
+            Vector2 predicted = target + cooperativeZombieVelocity * Mathf.Clamp(interceptTime, 0f, MaximumInterceptTime);
+            return cooperativeZombie.IsTerrainClear(target, predicted) && IsTerrainClear(position, predicted) ? predicted : target;
+        }
+
+
+        // 좀비의 인간 추격과 지원자의 예상 경로 가로채기를 위한 연속 이동
         private void PursueTarget()
         {
             // 기존 타일 구간 예약 반환 후 연속 위치의 점유로 전환
@@ -1218,6 +1462,12 @@ namespace RotWorld
                 baseSpeed = CalculatePursuitSpeed(baseSpeed, humanActualSpeed);
             }
 
+            // 지원자는 현재 좀비 뒤를 따라가는 대신 예상 이동 경로로 측면 접근
+            if (!isZombie && hasTarget)
+            {
+                target = FindCooperativeInterceptPosition(baseSpeed);
+            }
+
             // 직선이 물이나 건물에 막힐 때만 경로 탐색으로 보행 가능한 중간 지점 선택
             Vector2 waypoint = target;
 
@@ -1243,6 +1493,13 @@ namespace RotWorld
                 float distance = Vector2.Distance(position, waypoint);
                 // 지원자의 공격 준비 중에는 기존 충돌 간격까지 접근해 움직이는 좀비 추적
                 float attackRange = isZombie || combat.CanMoveDuringAttack ? UnitCombat.GrabRange : UnitCombat.HumanAttackRange;
+
+                // 예측 지점은 실제 좀비와 구분해 도착 전 정지 방지 및 공격은 실제 거리로만 판정
+                if (!isZombie && target != cooperativeZombie.position)
+                {
+                    attackRange = 0f;
+                }
+
                 float available = hasTarget && waypoint == target ? Mathf.Max(0f, distance - attackRange) : distance;
                 float step = Mathf.Min(remaining, MaximumSubstep, available);
 
