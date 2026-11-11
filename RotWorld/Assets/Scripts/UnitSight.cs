@@ -7,8 +7,9 @@ namespace RotWorld
     /// </summary>
     public static class UnitSight
     {
-        // 원형 감지 반경
+        // 최초 감지와 유형별 반응 종료 거리
         public const float DetectionRadius = 5f;
+        public const float FleeReleaseRadius = 15f;
         private const float ChaseReleaseRadius = 8f;
 
         // 감지 반경 안에서 건물에 가려지지 않은 가장 가까운 인간 조회
@@ -44,6 +45,32 @@ namespace RotWorld
         {
             // 좀비 목록에 인간 감지와 동일한 거리 및 차폐 조건 적용
             return FindVisibleUnit(map, observer, map.Zombies);
+        }
+
+
+        // 새 좀비 감지와 안전 거리 확보 전 기존 도주 대상 유지
+        public static int FindFleeZombie(CityMap map, Vector2 observer, int currentTarget)
+        {
+            // 가까운 시야 내 좀비를 우선해 새로운 위협에 반응
+            int visibleTarget = FindVisibleZombie(map, observer);
+
+            if (visibleTarget >= 0)
+            {
+                return visibleTarget;
+            }
+
+            // 감지 범위나 시야를 벗어나도 현재 좀비와 15타일 미만이면 도주 유지
+            if (currentTarget >= 0 && currentTarget < map.Zombies.Count)
+            {
+                Vector2 target = map.ZombiePositions.TryGetValue(currentTarget, out Vector2 livePosition) ? livePosition : (Vector2)map.Zombies[currentTarget];
+
+                if ((target - observer).sqrMagnitude < FleeReleaseRadius * FleeReleaseRadius)
+                {
+                    return currentTarget;
+                }
+            }
+
+            return -1;
         }
 
 

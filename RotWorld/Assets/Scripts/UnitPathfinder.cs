@@ -209,6 +209,13 @@ namespace RotWorld
                 frontier.Remove(node);
                 var tile = start + new Vector2Int(node.Index % Width - Radius, node.Index / Width - Radius);
 
+                // 안전 거리에 도달하는 최저 비용 타일에서 도주 구간 종료
+                if (threat.HasValue && (tile - threat.Value).sqrMagnitude >= UnitSight.FleeReleaseRadius * UnitSight.FleeReleaseRadius)
+                {
+                    destination = node.Index;
+                    break;
+                }
+
                 // 추적 목적지 도달 시 탐색 종료 또는 배회 목적지 선택
                 if (target.HasValue && tile == target.Value)
                 {

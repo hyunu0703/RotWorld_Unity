@@ -319,7 +319,7 @@ namespace RotWorld
             if (shouldScan)
             {
                 detectionRemaining = DetectionInterval;
-                chaseTarget = isZombie ? UnitSight.FindChaseHuman(map, position, chaseTarget) : UnitSight.FindVisibleZombie(map, position);
+                chaseTarget = isZombie ? UnitSight.FindChaseHuman(map, position, chaseTarget) : UnitSight.FindFleeZombie(map, position, chaseTarget);
             }
 
             // 연속 추격 중에는 감지만 갱신하고 타일 경로 교체 생략
