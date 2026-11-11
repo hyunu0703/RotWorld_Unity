@@ -457,7 +457,7 @@ namespace RotWorld
             Vector2 localPosition = transform.InverseTransformPoint(viewCamera.ScreenToWorldPoint(screenPosition));
             var tile = new Vector2Int(Mathf.FloorToInt(localPosition.x), Mathf.FloorToInt(localPosition.y));
 
-            if (!UnitPathfinder.CanOccupy(mapData, tile))
+            if (!UnitPathfinder.CanOccupy(mapData, tile) || mapData.OccupiedTiles.Contains(tile))
             {
                 return false;
             }

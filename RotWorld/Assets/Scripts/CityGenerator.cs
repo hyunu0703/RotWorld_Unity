@@ -98,8 +98,45 @@ namespace RotWorld
 
         // 건물 재고와 시작 개체 배치 결과
         public List<CityBuilding> Buildings { get; } = new List<CityBuilding>();
+        // 감지와 추적에서 사용할 실제 이동 좌표와 구간 목적지
+        // 추격 시 인간의 실제 이동속도 공유
+        internal Dictionary<int, float> HumanSpeeds { get; } = new Dictionary<int, float>();
+        internal Dictionary<int, Vector2> HumanPositions { get; } = new Dictionary<int, Vector2>();
+        internal Dictionary<int, Vector2> ZombiePositions { get; } = new Dictionary<int, Vector2>();
+        internal Dictionary<int, Vector2Int> HumanDestinations { get; } = new Dictionary<int, Vector2Int>();
+        internal HashSet<Vector2Int> OccupiedTiles { get; } = new HashSet<Vector2Int>();
+        private readonly Dictionary<Vector2Int, int> occupancyCounts = new Dictionary<Vector2Int, int>();
         public List<Vector2Int> Humans { get; } = new List<Vector2Int>();
         public List<Vector2Int> Zombies { get; } = new List<Vector2Int>();
+
+        // 여러 유닛의 현재 위치와 이동 예약을 참조 수로 누적
+        internal void OccupyTile(Vector2Int tile)
+        {
+            // 연속 추격이 다른 유닛의 예약 타일을 지날 때 기존 예약 보존
+            occupancyCounts.TryGetValue(tile, out int count);
+            occupancyCounts[tile] = count + 1;
+            OccupiedTiles.Add(tile);
+        }
+
+
+        // 해당 유닛이 소유한 점유만 반환
+        internal void ReleaseTile(Vector2Int tile)
+        {
+            // 다른 유닛의 현재 위치 또는 예약이 남은 타일은 점유 유지
+            if (!occupancyCounts.TryGetValue(tile, out int count))
+            {
+                return;
+            }
+
+            if (count > 1)
+            {
+                occupancyCounts[tile] = count - 1;
+                return;
+            }
+
+            occupancyCounts.Remove(tile);
+            OccupiedTiles.Remove(tile);
+        }
 
         // 지도 배열 할당
         public CityMap(int size, int seed)

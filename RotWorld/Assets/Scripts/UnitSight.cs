@@ -3,23 +3,62 @@ using UnityEngine;
 namespace RotWorld
 {
     /// <summary>
-    /// 좀비의 거리 제한과 건물 차폐를 고려한 인간 감지
+    /// 거리 제한과 건물 차폐를 고려한 인간 및 좀비 감지
     /// </summary>
     public static class UnitSight
     {
         // 원형 감지 반경
         public const float DetectionRadius = 5f;
+        private const float ChaseReleaseRadius = 8f;
 
         // 감지 반경 안에서 건물에 가려지지 않은 가장 가까운 인간 조회
         public static int FindVisibleHuman(CityMap map, Vector2 observer)
+        {
+            // 인간 목록에 공통 감지 조건 적용
+            return FindVisibleUnit(map, observer, map.Humans);
+        }
+
+
+        // 기존 인간 대상의 추적 유지 조건 검사 및 신규 대상 감지
+        public static int FindChaseHuman(CityMap map, Vector2 observer, int currentTarget)
+        {
+            // 기존 대상은 8타일과 건물 차폐 조건을 만족하는 동안 유지
+            if (currentTarget >= 0 && currentTarget < map.Humans.Count)
+            {
+                Vector2 target = map.HumanPositions.TryGetValue(currentTarget, out Vector2 livePosition) ? livePosition : (Vector2)map.Humans[currentTarget];
+
+                if ((target - observer).sqrMagnitude <= ChaseReleaseRadius * ChaseReleaseRadius &&
+                    HasLineOfSight(map, observer, target))
+                {
+                    return currentTarget;
+                }
+            }
+
+            // 추적 상실 후 새 인간은 최초 감지 반경 5타일에서만 탐색
+            return FindVisibleHuman(map, observer);
+        }
+
+
+        // 감지 반경 안에서 건물에 가려지지 않은 가장 가까운 좀비 조회
+        public static int FindVisibleZombie(CityMap map, Vector2 observer)
+        {
+            // 좀비 목록에 인간 감지와 동일한 거리 및 차폐 조건 적용
+            return FindVisibleUnit(map, observer, map.Zombies);
+        }
+
+
+        // 지정 인구 목록에서 가장 가까운 시야 내 대상 조회
+        private static int FindVisibleUnit(CityMap map, Vector2 observer, System.Collections.Generic.List<Vector2Int> units)
         {
             // 기존 인구 목록의 최신 타일 위치에서 거리와 시야 검사
             int nearest = -1;
             float bestDistance = DetectionRadius * DetectionRadius;
 
-            for (int i = 0; i < map.Humans.Count; i++)
+            for (int i = 0; i < units.Count; i++)
             {
-                Vector2 target = map.Humans[i];
+
+                var livePositions = units == map.Humans ? map.HumanPositions : map.ZombiePositions;
+                Vector2 target = livePositions.TryGetValue(i, out Vector2 livePosition) ? livePosition : (Vector2)units[i];
                 float distance = (target - observer).sqrMagnitude;
 
                 if (distance > bestDistance || !HasLineOfSight(map, observer, target))
