@@ -44,6 +44,22 @@ namespace RotWorld
         // 도달 가능한 주변 목적지 선택과 최소 비용 경로 반환
         public static void FindWanderPath(CityMap map, Vector2Int start, System.Random random, List<Vector2Int> path)
         {
+            // 기존 주변 탐색에서 무작위 목적지 선택
+            FindPath(map, start, random, null, path);
+        }
+
+
+        // 지정한 추적 대상까지 기존 지형 비용 기반 경로 탐색 재사용
+        public static void FindTargetPath(CityMap map, Vector2Int start, Vector2Int target, List<Vector2Int> path)
+        {
+            // 배회 반경 안의 추적 목적지 지정과 도달 불가 시 빈 경로 반환
+            FindPath(map, start, null, target, path);
+        }
+
+
+        // 무작위 배회 또는 지정 목적지까지 공통 보행 탐색
+        private static void FindPath(CityMap map, Vector2Int start, System.Random random, Vector2Int? target, List<Vector2Int> path)
+        {
             // 제한된 지역 배열과 비용 우선 탐색 큐 준비
             path.Clear();
             var costs = new float[Width * Width];
@@ -68,8 +84,15 @@ namespace RotWorld
                 frontier.Remove(node);
                 var tile = start + new Vector2Int(node.Index % Width - Radius, node.Index / Width - Radius);
 
+                // 추적 목적지 도달 시 탐색 종료 또는 배회 목적지 선택
+                if (target.HasValue && tile == target.Value)
+                {
+                    destination = node.Index;
+                    break;
+                }
+
                 // 충분히 떨어진 도달 가능 타일 중 균등 무작위 목적지 선택
-                if ((tile - start).sqrMagnitude >= Radius)
+                if (!target.HasValue && (tile - start).sqrMagnitude >= Radius)
                 {
                     candidates++;
 
@@ -113,7 +136,7 @@ namespace RotWorld
             }
 
             // 좁은 고립 영역에서는 가까운 도달 가능 타일로 대체
-            if (destination < 0)
+            if (destination < 0 && !target.HasValue)
             {
                 for (int i = 0; i < parents.Length; i++)
                 {

@@ -4,7 +4,7 @@ using UnityEngine;
 namespace RotWorld
 {
     /// <summary>
-    /// 무작위 주변 목적지 선택과 경로 이동 및 목적지 도착 후 휴식 제어
+    /// 주변 배회와 시야 내 인간 추적 및 경로 이동 제어
     /// </summary>
     public sealed class UnitWander : MonoBehaviour
     {
@@ -31,6 +31,14 @@ namespace RotWorld
         private float restRemaining;
         private UnitWalkAnimation walkAnimation;
 
+        // 좀비 감지 주기와 대상 변경에 따른 경로 재계산 상태
+        private const float DetectionInterval = .2f;
+        private bool isZombie;
+        private float detectionRemaining;
+        private int chaseTarget = -1;
+        private bool hasChasePath;
+        private Vector2Int chaseDestination;
+
         // 기존 인구 데이터와 이동 및 걷기 표시 연결
         public void Initialize(CityMap map, bool zombie, int index)
         {
@@ -45,6 +53,7 @@ namespace RotWorld
             }
 
             this.map = map;
+            isZombie = zombie;
             population = units;
             populationIndex = index;
             currentTile = units[index];
@@ -64,11 +73,13 @@ namespace RotWorld
                 return;
             }
 
+            UpdateChase();
+
             if (pathIndex >= path.Count)
             {
                 restRemaining -= Time.deltaTime;
 
-                if (restRemaining <= 0f)
+                if (restRemaining <= 0f && chaseTarget < 0)
                 {
                     UnitPathfinder.FindWanderPath(map, currentTile, random, path);
                     pathIndex = 0;
@@ -104,7 +115,13 @@ namespace RotWorld
                 }
 
                 currentTile = target;
+
                 pathIndex++;
+
+                if (isZombie)
+                {
+                    UpdateChase(false);
+                }
             }
 
             // 논리 좌표와 표시 위치 동기화 및 실제 이동 거리 기반 걷기 모션 갱신
@@ -115,6 +132,63 @@ namespace RotWorld
             if (pathIndex >= path.Count)
             {
                 Rest();
+            }
+        }
+
+
+        // 주기적 인간 감지와 타일 경계에서 안전한 추적 경로 전환
+        private void UpdateChase(bool detect = true)
+        {
+            // 인간의 기존 배회 유지 및 좀비 감지 시점 분산
+            if (!isZombie)
+            {
+                return;
+            }
+
+            if (detect)
+            {
+                detectionRemaining -= Time.deltaTime;
+            }
+
+            if (detect && detectionRemaining <= 0f)
+            {
+                detectionRemaining = DetectionInterval;
+                chaseTarget = UnitSight.FindVisibleHuman(map, position);
+            }
+
+            // 진행 중인 인접 구간을 마친 뒤 경로 교체로 건물 모서리 관통 방지
+            if (position != (Vector2)currentTile)
+            {
+                return;
+            }
+
+            if (chaseTarget < 0)
+            {
+                if (hasChasePath)
+                {
+                    path.Clear();
+                    pathIndex = 0;
+                    hasChasePath = false;
+                    Rest();
+                }
+
+                return;
+            }
+
+            Vector2Int destination = map.Humans[chaseTarget];
+
+            if (!hasChasePath || destination != chaseDestination)
+            {
+                // 최신 인간 위치까지 경로 재탐색과 배회 대기 취소
+                UnitPathfinder.FindTargetPath(map, currentTile, destination, path);
+                pathIndex = 0;
+                chaseDestination = destination;
+                hasChasePath = true;
+
+                if (path.Count == 0)
+                {
+                    walkAnimation.Stop();
+                }
             }
         }
 
