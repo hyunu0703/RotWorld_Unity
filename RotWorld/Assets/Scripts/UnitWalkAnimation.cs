@@ -19,6 +19,8 @@ namespace RotWorld
         private bool isZombieVisual;
         private const int ZombieSortingOffset = 1;
         private Sprite[] frames;
+        private Sprite[] summonFrames;
+        private bool isSummonWhite;
         private bool isHitVisible;
         private float distance;
         private float knockbackHeight;
@@ -39,6 +41,44 @@ namespace RotWorld
             humanSortingOrder = visual.sortingOrder;
             this.frames = frames;
             Stop();
+        }
+
+
+        // 소환 시 원래 크기를 유지하며 흰색 깜빡임 시작
+        public void PlaySummon(Sprite[] whiteFrames)
+        {
+            // 이동과 전투를 유지한 채 표시 프레임만 전환
+            summonFrames = whiteFrames;
+            isSummonWhite = false;
+            visual.sprite = frames[0];
+            StartCoroutine(AnimateSummon());
+        }
+
+
+        // 걷기 프레임과 함께 소환 깜빡임 진행
+        private System.Collections.IEnumerator AnimateSummon()
+        {
+            const float FlashDelay = .05f;
+            const float WhiteDuration = .1f;
+            float elapsed = 0f;
+
+            while (elapsed < FlashDelay + WhiteDuration)
+            {
+                yield return null;
+                elapsed += Time.deltaTime;
+
+                // 원래 색으로 등장한 뒤 한 번 흰색으로 깜빡이고 복원
+                bool flashWhite = elapsed >= FlashDelay && elapsed < FlashDelay + WhiteDuration;
+
+                if (isSummonWhite != flashWhite)
+                {
+                    isSummonWhite = flashWhite;
+                    int phase = Mathf.FloorToInt(distance / StrideLength * FrameSequence.Length);
+                    visual.sprite = (isSummonWhite ? summonFrames : frames)[FrameSequence[phase]];
+                }
+
+            }
+
         }
 
 
@@ -66,7 +106,7 @@ namespace RotWorld
             // 스프라이트 교체만 사용해 원본 머리와 몸통의 픽셀 크기 유지
             distance = Mathf.Repeat(distance + travelled, StrideLength);
             int phase = Mathf.FloorToInt(distance / StrideLength * FrameSequence.Length);
-            visual.sprite = frames[FrameSequence[phase]];
+            visual.sprite = (isSummonWhite ? summonFrames : frames)[FrameSequence[phase]];
         }
 
 
@@ -162,7 +202,7 @@ namespace RotWorld
         {
             // 프레임 진행 초기화와 원본 아이콘 복원
             distance = 0f;
-            visual.sprite = frames[0];
+            visual.sprite = (isSummonWhite ? summonFrames : frames)[0];
         }
     }
 }

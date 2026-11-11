@@ -59,6 +59,9 @@ namespace RotWorld
         private PointerEventData summonPointer;
         private readonly List<RaycastResult> summonRaycasts = new List<RaycastResult>();
         private const float SummonIconSize = 40f;
+        private const float CursorClickDuration = .2f;
+        private const float CursorClickScale = .6f;
+        private float cursorClickRemaining;
         private const float MinimumSummonCursorScale = .5f;
         private const float SummonOutlineWidth = 3f;
         private static readonly Color SummonOutlineColor = new Color32(255, 217, 92, 255);
@@ -144,6 +147,11 @@ namespace RotWorld
             RectTransformUtility.ScreenPointToLocalPointInRectangle(interfaceRect, screenPosition, null, out Vector2 localPosition);
             summonCursor.rectTransform.anchoredPosition = localPosition;
 
+            // 클릭 축소를 현재 줌 크기와 독립적으로 복원
+            cursorClickRemaining = Mathf.Max(0f, cursorClickRemaining - Time.unscaledDeltaTime);
+            float clickProgress = 1f - cursorClickRemaining / CursorClickDuration;
+            summonCursor.rectTransform.localScale = Vector3.one * Mathf.Lerp(CursorClickScale, 1f, Mathf.SmoothStep(0f, 1f, clickProgress));
+
             // 지도 줌 단계에 따라 커서만 기존 크기의 절반부터 원래 크기까지 보간
             float cursorSize = SummonIconSize * Mathf.Lerp(MinimumSummonCursorScale, 1f, mapView.ZoomProgress);
             summonCursor.rectTransform.sizeDelta = new Vector2(cursorSize, cursorSize);
@@ -162,6 +170,10 @@ namespace RotWorld
             {
                 return;
             }
+
+            // 지도 클릭마다 축소를 다시 시작해 연속 클릭에도 즉시 반응
+            cursorClickRemaining = CursorClickDuration;
+            summonCursor.rectTransform.localScale = Vector3.one * CursorClickScale;
 
             if (mapView.TrySummon(screenPosition, summonSelection == SummonSelection.Zombie))
             {
@@ -183,6 +195,8 @@ namespace RotWorld
         {
             // 단일 선택값에서 두 버튼의 활성 표시 도출
             summonSelection = selection;
+            cursorClickRemaining = 0f;
+            summonCursor.rectTransform.localScale = Vector3.one;
             humanOutline.enabled = selection == SummonSelection.Human;
             zombieOutline.enabled = selection == SummonSelection.Zombie;
             summonCursor.gameObject.SetActive(selection != SummonSelection.None);

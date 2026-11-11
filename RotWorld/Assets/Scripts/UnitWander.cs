@@ -116,7 +116,14 @@ namespace RotWorld
             map.OccupyTile(currentTile);
             random = new System.Random(unchecked(map.Seed * 397 ^ index * 7919 ^ (zombie ? 1 : 0)));
             speedVariation = Mathf.Lerp(MinimumSpeedVariation, MaximumSpeedVariation, (float)random.NextDouble());
-            Rest();
+
+            // 생성 직후에는 휴식 없이 기존 배회 경로로 이동 시작
+            UnitPathfinder.FindWanderPath(map, currentTile, random, path);
+
+            if (path.Count == 0)
+            {
+                Rest();
+            }
         }
 
 

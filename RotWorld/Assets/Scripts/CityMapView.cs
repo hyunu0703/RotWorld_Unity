@@ -52,6 +52,8 @@ namespace RotWorld
         private Sprite zombieIcon;
         private Sprite[] humanWalkFrames;
         private Sprite[] zombieWalkFrames;
+        private Sprite[] humanSummonFrames;
+        private Sprite[] zombieSummonFrames;
         private Sprite[] conversionFrames;
         private Transform summonedUnits;
 
@@ -466,13 +468,13 @@ namespace RotWorld
             // 전체 지도 재생성 없이 클릭한 타일에 공용 아이콘 표시와 인구 데이터 반영
             var population = zombie ? mapData.Zombies : mapData.Humans;
             population.Add(tile);
-            CreateUnitVisual(tile, zombie, population.Count - 1);
+            CreateUnitVisual(tile, zombie, population.Count - 1, true);
             return true;
         }
 
 
         // 초기 인구와 소환 인구가 공유하는 독립 유닛 표시 생성
-        private void CreateUnitVisual(Vector2Int tile, bool zombie, int index)
+        private void CreateUnitVisual(Vector2Int tile, bool zombie, int index, bool animateSummon = false)
         {
             // 지도 텍스처와 별도로 배치해 머리의 반 픽셀 정밀도 유지
             var unit = new GameObject(zombie ? "Summoned Zombie" : "Summoned Human");
@@ -483,16 +485,22 @@ namespace RotWorld
             var renderer = visual.AddComponent<SpriteRenderer>();
             renderer.sprite = GetUnitIcon(zombie);
             renderer.sortingOrder = spriteRenderer.sortingOrder + 1;
-            unit.AddComponent<UnitWalkAnimation>().Initialize(renderer, GetUnitWalkFrames(zombie));
+            var animationView = unit.AddComponent<UnitWalkAnimation>();
+            animationView.Initialize(renderer, GetUnitWalkFrames(zombie));
+
+            if (animateSummon)
+            {
+                animationView.PlaySummon(GetUnitWalkFrames(zombie, true));
+            }
             unit.AddComponent<UnitWander>().Initialize(mapData, zombie, index, GetUnitWalkFrames(true), GetUnitConversionFrames());
         }
 
 
         // 유형별 원본 아이콘과 두 다리 포즈를 공유하는 걷기 프레임 조회
-        private Sprite[] GetUnitWalkFrames(bool zombie)
+        private Sprite[] GetUnitWalkFrames(bool zombie, bool white = false)
         {
             // 이미 생성한 공용 프레임 재사용으로 유닛별 텍스처 복제 방지
-            var frames = zombie ? zombieWalkFrames : humanWalkFrames;
+            var frames = white ? (zombie ? zombieSummonFrames : humanSummonFrames) : (zombie ? zombieWalkFrames : humanWalkFrames);
 
             if (frames != null)
             {
@@ -502,12 +510,24 @@ namespace RotWorld
             const int FrameCount = 3;
             int iconSize = PixelsPerTile * UnitPixelScale;
             frames = new Sprite[FrameCount];
-            frames[0] = GetUnitIcon(zombie);
+            if (!white)
+            {
+                frames[0] = GetUnitIcon(zombie);
+            }
 
-            for (int frame = 1; frame < FrameCount; frame++)
+            for (int frame = white ? 0 : 1; frame < FrameCount; frame++)
             {
                 var pixels = new Color32[iconSize * iconSize];
                 DrawPeople(pixels, iconSize, new System.Collections.Generic.List<Vector2Int> { Vector2Int.zero }, zombie, frame);
+
+                // 투명도를 유지한 흰색 걷기 프레임을 모든 소환 개체가 공유
+                if (white)
+                {
+                    for (int i = 0; i < pixels.Length; i++)
+                    {
+                        pixels[i] = new Color32(255, 255, 255, pixels[i].a);
+                    }
+                }
                 var texture = new Texture2D(iconSize, iconSize, TextureFormat.RGBA32, false);
                 texture.filterMode = FilterMode.Point;
                 texture.wrapMode = TextureWrapMode.Clamp;
@@ -516,7 +536,18 @@ namespace RotWorld
                 frames[frame] = Sprite.Create(texture, new Rect(0, 0, iconSize, iconSize), Vector2.zero, iconSize);
             }
 
-            if (zombie)
+            if (white)
+            {
+                if (zombie)
+                {
+                    zombieSummonFrames = frames;
+                }
+                else
+                {
+                    humanSummonFrames = frames;
+                }
+            }
+            else if (zombie)
             {
                 zombieWalkFrames = frames;
             }
@@ -610,7 +641,7 @@ namespace RotWorld
         }
 
         // 원본 아이콘을 제외한 걷기 전용 자원 해제
-        private void ReleaseWalkFrames(Sprite[] frames)
+        private void ReleaseWalkFrames(Sprite[] frames, bool includeFirst = false)
         {
             // 아직 생성하지 않은 유형의 프레임 정리 생략
             if (frames == null)
@@ -618,7 +649,7 @@ namespace RotWorld
                 return;
             }
 
-            for (int i = 1; i < frames.Length; i++)
+            for (int i = includeFirst ? 0 : 1; i < frames.Length; i++)
             {
                 Destroy(frames[i].texture);
                 Destroy(frames[i]);
@@ -666,6 +697,8 @@ namespace RotWorld
             ReleaseConversionFrames();
             ReleaseWalkFrames(humanWalkFrames);
             ReleaseWalkFrames(zombieWalkFrames);
+            ReleaseWalkFrames(humanSummonFrames, true);
+            ReleaseWalkFrames(zombieSummonFrames, true);
 
             if (humanIcon != null)
             {
