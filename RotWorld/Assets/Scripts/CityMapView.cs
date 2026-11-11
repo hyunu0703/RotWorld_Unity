@@ -50,6 +50,8 @@ namespace RotWorld
         // 유형별 공용 소환 아이콘과 소환 개체 보관
         private Sprite humanIcon;
         private Sprite zombieIcon;
+        private Sprite[] humanWalkFrames;
+        private Sprite[] zombieWalkFrames;
         private Transform summonedUnits;
 
         // 기존 씬 카메라와 표시 컴포넌트 연결
@@ -178,14 +180,14 @@ namespace RotWorld
             mapData = map;
 
             // 초기 인구도 소환 유닛과 같은 정밀도와 공용 아이콘으로 표시
-            foreach (var tile in map.Humans)
+            for (int i = 0; i < map.Humans.Count; i++)
             {
-                CreateUnitVisual(tile, false);
+                CreateUnitVisual(map.Humans[i], false, i);
             }
 
-            foreach (var tile in map.Zombies)
+            for (int i = 0; i < map.Zombies.Count; i++)
             {
-                CreateUnitVisual(tile, true);
+                CreateUnitVisual(map.Zombies[i], true, i);
             }
 
             viewCenter = new Vector2(map.Size / 2f, map.Size / 2f);
@@ -268,7 +270,7 @@ namespace RotWorld
 
 
         // 인도 위 작은 인물과 좀비 실루엣 표시
-        private static void DrawPeople(Color32[] pixels, int stride, System.Collections.Generic.List<Vector2Int> people, bool zombie)
+        private static void DrawPeople(Color32[] pixels, int stride, System.Collections.Generic.List<Vector2Int> people, bool zombie, int walkFrame = 0)
         {
             // 기존 크기를 유지한 두 배 격자에서 반 픽셀 위치 표현
             const int headSize = 2;
@@ -279,8 +281,10 @@ namespace RotWorld
             {
                 int x = (person.x * PixelsPerTile + 2) * UnitPixelScale;
                 int y = person.y * PixelsPerTile * UnitPixelScale;
-                Fill(pixels, stride, x, y, UnitPixelScale, 2 * UnitPixelScale, Hex(0x293539));
-                Fill(pixels, stride, x + 2 * UnitPixelScale, y, UnitPixelScale, 2 * UnitPixelScale, Hex(0x293539));
+                int leftLift = walkFrame == 1 ? UnitPixelScale : 0;
+                int rightLift = walkFrame == 2 ? UnitPixelScale : 0;
+                Fill(pixels, stride, x, y + leftLift, UnitPixelScale, 2 * UnitPixelScale - leftLift, Hex(0x293539));
+                Fill(pixels, stride, x + 2 * UnitPixelScale, y + rightLift, UnitPixelScale, 2 * UnitPixelScale - rightLift, Hex(0x293539));
                 Fill(pixels, stride, x, y + 2 * UnitPixelScale, bodyWidth * UnitPixelScale, 3 * UnitPixelScale,
                     zombie ? Hex(0x7a6d52) : Hex(0x5696af));
                 // 불투명 단색 머리의 좌우 어깨 여백을 동일하게 배치
@@ -453,30 +457,92 @@ namespace RotWorld
             Vector2 localPosition = transform.InverseTransformPoint(viewCamera.ScreenToWorldPoint(screenPosition));
             var tile = new Vector2Int(Mathf.FloorToInt(localPosition.x), Mathf.FloorToInt(localPosition.y));
 
-            if (tile.x < 0 || tile.y < 0 || tile.x >= mapData.Size || tile.y >= mapData.Size)
+            if (!UnitPathfinder.CanOccupy(mapData, tile))
             {
                 return false;
             }
 
             // 전체 지도 재생성 없이 클릭한 타일에 공용 아이콘 표시와 인구 데이터 반영
-            CreateUnitVisual(tile, zombie);
-            (zombie ? mapData.Zombies : mapData.Humans).Add(tile);
+            var population = zombie ? mapData.Zombies : mapData.Humans;
+            population.Add(tile);
+            CreateUnitVisual(tile, zombie, population.Count - 1);
             return true;
         }
 
 
         // 초기 인구와 소환 인구가 공유하는 독립 유닛 표시 생성
-        private void CreateUnitVisual(Vector2Int tile, bool zombie)
+        private void CreateUnitVisual(Vector2Int tile, bool zombie, int index)
         {
             // 지도 텍스처와 별도로 배치해 머리의 반 픽셀 정밀도 유지
             var unit = new GameObject(zombie ? "Summoned Zombie" : "Summoned Human");
             unit.transform.SetParent(summonedUnits, false);
             unit.transform.localPosition = new Vector3(tile.x, tile.y, 0);
-            var renderer = unit.AddComponent<SpriteRenderer>();
+            var visual = new GameObject("Unit Visual");
+            visual.transform.SetParent(unit.transform, false);
+            var renderer = visual.AddComponent<SpriteRenderer>();
             renderer.sprite = GetUnitIcon(zombie);
             renderer.sortingOrder = spriteRenderer.sortingOrder + 1;
+            unit.AddComponent<UnitWalkAnimation>().Initialize(renderer, GetUnitWalkFrames(zombie));
+            unit.AddComponent<UnitWander>().Initialize(mapData, zombie, index);
         }
 
+
+        // 유형별 원본 아이콘과 두 다리 포즈를 공유하는 걷기 프레임 조회
+        private Sprite[] GetUnitWalkFrames(bool zombie)
+        {
+            // 이미 생성한 공용 프레임 재사용으로 유닛별 텍스처 복제 방지
+            var frames = zombie ? zombieWalkFrames : humanWalkFrames;
+
+            if (frames != null)
+            {
+                return frames;
+            }
+
+            const int FrameCount = 3;
+            int iconSize = PixelsPerTile * UnitPixelScale;
+            frames = new Sprite[FrameCount];
+            frames[0] = GetUnitIcon(zombie);
+
+            for (int frame = 1; frame < FrameCount; frame++)
+            {
+                var pixels = new Color32[iconSize * iconSize];
+                DrawPeople(pixels, iconSize, new System.Collections.Generic.List<Vector2Int> { Vector2Int.zero }, zombie, frame);
+                var texture = new Texture2D(iconSize, iconSize, TextureFormat.RGBA32, false);
+                texture.filterMode = FilterMode.Point;
+                texture.wrapMode = TextureWrapMode.Clamp;
+                texture.SetPixels32(pixels);
+                texture.Apply(false, true);
+                frames[frame] = Sprite.Create(texture, new Rect(0, 0, iconSize, iconSize), Vector2.zero, iconSize);
+            }
+
+            if (zombie)
+            {
+                zombieWalkFrames = frames;
+            }
+            else
+            {
+                humanWalkFrames = frames;
+            }
+
+            return frames;
+        }
+
+
+        // 원본 아이콘을 제외한 걷기 전용 자원 해제
+        private void ReleaseWalkFrames(Sprite[] frames)
+        {
+            // 아직 생성하지 않은 유형의 프레임 정리 생략
+            if (frames == null)
+            {
+                return;
+            }
+
+            for (int i = 1; i < frames.Length; i++)
+            {
+                Destroy(frames[i].texture);
+                Destroy(frames[i]);
+            }
+        }
 
         // 런타임 그래픽 자원 해제
         private void ReleaseGraphics()
@@ -515,7 +581,10 @@ namespace RotWorld
             // 씬 종료 시 생성한 그래픽 자원의 수명 종료
             ReleaseGraphics();
 
-            // UI와 소환 표시에서 공유한 아이콘의 소유 자원 해제
+            // 유형별 걷기 전용 프레임과 공용 아이콘의 소유 자원 해제
+            ReleaseWalkFrames(humanWalkFrames);
+            ReleaseWalkFrames(zombieWalkFrames);
+
             if (humanIcon != null)
             {
                 Destroy(humanIcon.texture);
