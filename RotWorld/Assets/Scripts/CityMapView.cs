@@ -11,6 +11,7 @@ namespace RotWorld
     {
         // 지도 표시 해상도와 전체 보기 전환 단계
         public const int PixelsPerTile = 8;
+        private const int UnitPixelScale = 2;
         private const int OverviewTransitionSteps = 4;
         private const int MaxZoom = 6 + OverviewTransitionSteps - 1;
         private const int MaximumOverviewSize = 256;
@@ -42,8 +43,15 @@ namespace RotWorld
         // 카메라 중심과 사용자 입력 상태
         private Vector2 viewCenter;
         private int zoom = 1;
+        public float ZoomProgress => zoom / (float)MaxZoom;
         private bool isDragging;
         public bool IsInputBlocked { get; set; }
+
+        // 소환 중 지도 드래그 차단과 유형별 공용 아이콘 자원
+        public bool IsSummoning { get; set; }
+        private Sprite humanIcon;
+        private Sprite zombieIcon;
+        private Transform summonedUnits;
 
         // 기존 씬 카메라와 표시 컴포넌트 연결
         public void Initialize(Camera worldCamera)
@@ -123,9 +131,6 @@ namespace RotWorld
                 DrawBuilding(pixels, width, building);
             }
 
-            DrawPeople(pixels, width, map.Humans, false);
-            DrawPeople(pixels, width, map.Zombies, true);
-
             // 완성된 픽셀 배열을 원본 표시 자원에 업로드
             var nextTexture = new Texture2D(width, width, TextureFormat.RGBA32, false);
             nextTexture.name = "City pixels";
@@ -157,12 +162,33 @@ namespace RotWorld
             var nextOverviewSprite = Sprite.Create(nextOverview, new Rect(0, 0, overviewSize, overviewSize), Vector2.zero, overviewPixelsPerUnit, 0, SpriteMeshType.FullRect);
             // 새 표시 자원 준비 후 기존 자원 교체
             ReleaseGraphics();
+
+            // 새 지도 교체 시 이전 지도에 소환한 표시 객체 정리
+            if (summonedUnits != null)
+            {
+                Destroy(summonedUnits.gameObject);
+            }
+
+            summonedUnits = new GameObject("Summoned Units").transform;
+            summonedUnits.SetParent(transform, false);
             mapTexture = nextTexture;
             mapSprite = nextSprite;
             overviewTexture = nextOverview;
             overviewSprite = nextOverviewSprite;
             this.overviewPixelsPerUnit = overviewPixelsPerUnit;
             mapData = map;
+
+            // 초기 인구도 소환 유닛과 같은 정밀도와 공용 아이콘으로 표시
+            foreach (var tile in map.Humans)
+            {
+                CreateUnitVisual(tile, false);
+            }
+
+            foreach (var tile in map.Zombies)
+            {
+                CreateUnitVisual(tile, true);
+            }
+
             viewCenter = new Vector2(map.Size / 2f, map.Size / 2f);
             zoom = 0;
             UpdateCamera();
@@ -245,15 +271,22 @@ namespace RotWorld
         // 인도 위 작은 인물과 좀비 실루엣 표시
         private static void DrawPeople(Color32[] pixels, int stride, System.Collections.Generic.List<Vector2Int> people, bool zombie)
         {
-            // 개체 타일 위치를 픽셀 좌표로 환산해 유형별 실루엣 표시
+            // 기존 크기를 유지한 두 배 격자에서 반 픽셀 위치 표현
+            const int headSize = 2;
+            const int bodyWidth = 3;
+            int headOffset = (bodyWidth - headSize) * UnitPixelScale / 2;
+
             foreach (var person in people)
             {
-                int x = person.x * PixelsPerTile + 2;
-                int y = person.y * PixelsPerTile + 1;
-                Fill(pixels, stride, x, y, 1, 2, Hex(0x293539));
-                Fill(pixels, stride, x + 2, y, 1, 2, Hex(0x293539));
-                Fill(pixels, stride, x, y + 2, 3, 3, zombie ? Hex(0x7a6d52) : Hex(0x5696af));
-                Fill(pixels, stride, x + 1, y + 5, 2, 2, zombie ? Hex(0x91a171) : Hex(0xd8b08b));
+                int x = (person.x * PixelsPerTile + 2) * UnitPixelScale;
+                int y = person.y * PixelsPerTile * UnitPixelScale;
+                Fill(pixels, stride, x, y, UnitPixelScale, 2 * UnitPixelScale, Hex(0x293539));
+                Fill(pixels, stride, x + 2 * UnitPixelScale, y, UnitPixelScale, 2 * UnitPixelScale, Hex(0x293539));
+                Fill(pixels, stride, x, y + 2 * UnitPixelScale, bodyWidth * UnitPixelScale, 3 * UnitPixelScale,
+                    zombie ? Hex(0x7a6d52) : Hex(0x5696af));
+                // 불투명 단색 머리의 좌우 어깨 여백을 동일하게 배치
+                Fill(pixels, stride, x + headOffset, y + 5 * UnitPixelScale, headSize * UnitPixelScale, headSize * UnitPixelScale,
+                    zombie ? Hex(0x91a171) : Hex(0xd8b08b));
             }
         }
 
@@ -340,10 +373,15 @@ namespace RotWorld
 
             if (mouse.leftButton.wasPressedThisFrame)
             {
-                isDragging = !overUi;
+                isDragging = !overUi && !IsSummoning;
             }
 
             if (mouse.leftButton.wasReleasedThisFrame)
+            {
+                isDragging = false;
+            }
+
+            if (IsSummoning)
             {
                 isDragging = false;
             }
@@ -372,6 +410,77 @@ namespace RotWorld
                     UpdateCamera();
                 }
             }
+        }
+
+
+        // 기존 지도 인물 표현을 재사용한 유형별 공용 소환 아이콘 조회
+        public Sprite GetUnitIcon(bool zombie)
+        {
+            // 최초 요청 시에만 투명 배경의 한 타일 아이콘 생성
+            var icon = zombie ? zombieIcon : humanIcon;
+
+            if (icon != null)
+            {
+                return icon;
+            }
+
+            int iconSize = PixelsPerTile * UnitPixelScale;
+            var pixels = new Color32[iconSize * iconSize];
+            DrawPeople(pixels, iconSize, new System.Collections.Generic.List<Vector2Int> { Vector2Int.zero }, zombie);
+            var texture = new Texture2D(iconSize, iconSize, TextureFormat.RGBA32, false);
+            texture.filterMode = FilterMode.Point;
+            texture.wrapMode = TextureWrapMode.Clamp;
+            texture.SetPixels32(pixels);
+            texture.Apply(false, true);
+            icon = Sprite.Create(texture, new Rect(0, 0, iconSize, iconSize), Vector2.zero, iconSize);
+
+            if (zombie)
+            {
+                zombieIcon = icon;
+            }
+            else
+            {
+                humanIcon = icon;
+            }
+
+            return icon;
+        }
+
+
+        // 화면 클릭 좌표를 지도 타일로 변환해 데이터와 유닛 표시 추가
+        public bool TrySummon(Vector2 screenPosition, bool zombie)
+        {
+            // 지도 미준비와 설정창 입력 차단 및 카메라 외부 클릭 거부
+            if (mapData == null || viewCamera == null || IsInputBlocked || !viewCamera.pixelRect.Contains(screenPosition))
+            {
+                return false;
+            }
+
+            Vector2 localPosition = transform.InverseTransformPoint(viewCamera.ScreenToWorldPoint(screenPosition));
+            var tile = new Vector2Int(Mathf.FloorToInt(localPosition.x), Mathf.FloorToInt(localPosition.y));
+
+            if (tile.x < 0 || tile.y < 0 || tile.x >= mapData.Size || tile.y >= mapData.Size)
+            {
+                return false;
+            }
+
+            // 전체 지도 재생성 없이 클릭한 타일에 공용 아이콘 표시와 인구 데이터 반영
+            CreateUnitVisual(tile, zombie);
+            (zombie ? mapData.Zombies : mapData.Humans).Add(tile);
+            return true;
+        }
+
+
+        // 초기 인구와 소환 인구가 공유하는 독립 유닛 표시 생성
+        private void CreateUnitVisual(Vector2Int tile, bool zombie)
+        {
+            // 지도 텍스처와 별도로 배치해 머리의 반 픽셀 정밀도 유지
+            var unit = new GameObject(zombie ? "Summoned Zombie" : "Summoned Human");
+            unit.transform.SetParent(summonedUnits, false);
+            unit.transform.localPosition = new Vector3(tile.x, tile.y, 0);
+            var renderer = unit.AddComponent<SpriteRenderer>();
+            renderer.sprite = GetUnitIcon(zombie);
+            renderer.sortingOrder = spriteRenderer.sortingOrder + 1;
         }
 
 
@@ -411,6 +520,19 @@ namespace RotWorld
         {
             // 씬 종료 시 생성한 그래픽 자원의 수명 종료
             ReleaseGraphics();
+
+            // UI와 소환 표시에서 공유한 아이콘의 소유 자원 해제
+            if (humanIcon != null)
+            {
+                Destroy(humanIcon.texture);
+                Destroy(humanIcon);
+            }
+
+            if (zombieIcon != null)
+            {
+                Destroy(zombieIcon.texture);
+                Destroy(zombieIcon);
+            }
         }
     }
 }

@@ -1,8 +1,10 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.UI;
 using UnityEngine.Serialization;
 using UnityEngine.UI;
@@ -27,6 +29,10 @@ namespace RotWorld
         private const int SettingsRowHeight = 48;
         private const int IntegerCharacterLimit = 11;
 
+        // 하단 도구 모음과 소환 패널 높이
+        private const float BottomToolbarHeight = 64f;
+        private const float UnitPanelHeight = 100f;
+
         // 생성 UI의 배경과 컨트롤 색상
         private static readonly Color PanelColor = new Color32(35, 43, 52, 255);
         private static readonly Color ControlColor = new Color32(57, 69, 80, 255);
@@ -37,6 +43,24 @@ namespace RotWorld
         private TMP_Text statusLabel;
         private TMP_Text summaryLabel;
         private TMP_Text welcomeLabel;
+
+        // Q키로 함께 표시를 전환할 하단 도구 모음과 자식 패널
+        private GameObject bottomToolbar;
+        private GameObject unitSummonPanel;
+
+        // 단일 소환 선택과 버튼 외곽선 및 커서 표시
+        private enum SummonSelection { None, Human, Zombie }
+        private SummonSelection summonSelection;
+        private Outline humanOutline;
+        private Outline zombieOutline;
+        private Image summonCursor;
+        private RectTransform interfaceRect;
+        private PointerEventData summonPointer;
+        private readonly List<RaycastResult> summonRaycasts = new List<RaycastResult>();
+        private const float SummonIconSize = 40f;
+        private const float MinimumSummonCursorScale = .5f;
+        private const float SummonOutlineWidth = 3f;
+        private static readonly Color SummonOutlineColor = new Color32(255, 217, 92, 255);
 
         // 생성 설정 입력과 중복 실행 제어
         private TMP_InputField seedInput;
@@ -71,6 +95,133 @@ namespace RotWorld
             mapView = mapObject.AddComponent<CityMapView>();
             mapView.Initialize(worldCamera);
             BuildInterface();
+        }
+
+
+        // Q키 입력에 따른 하단 도구 모음과 소환 패널 표시 전환
+        private void Update()
+        {
+            // UI 구성 전 또는 키보드 부재 시 입력 처리 생략
+            var keyboard = Keyboard.current;
+
+            if (bottomToolbar == null || keyboard == null || !keyboard.qKey.wasPressedThisFrame)
+            {
+                return;
+            }
+
+            // 부모 활성 상태 반전으로 하단 도구 모음과 소환 패널 동시 전환
+            bottomToolbar.SetActive(!bottomToolbar.activeSelf);
+
+            if (!bottomToolbar.activeSelf)
+            {
+                SetSummonSelection(SummonSelection.None);
+            }
+        }
+
+
+        // UI 이벤트 처리 이후 커서 위치 갱신과 지도 클릭 소환
+        private void LateUpdate()
+        {
+            // 비활성 선택과 입력 차단 상태에서 커서 숨김
+            if (summonCursor == null)
+            {
+                return;
+            }
+
+            var mouse = Mouse.current;
+            bool canSummon = summonSelection != SummonSelection.None && mouse != null &&
+                unitSummonPanel.activeInHierarchy && !mapView.IsInputBlocked && Application.isFocused;
+            summonCursor.gameObject.SetActive(canSummon);
+
+            if (!canSummon)
+            {
+                return;
+            }
+
+            // 화면 좌표를 캔버스 좌표로 변환하고 커서 아이콘에 전달
+            Vector2 screenPosition = mouse.position.ReadValue();
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(interfaceRect, screenPosition, null, out Vector2 localPosition);
+            summonCursor.rectTransform.anchoredPosition = localPosition;
+
+            // 지도 줌 단계에 따라 커서만 기존 크기의 절반부터 원래 크기까지 보간
+            float cursorSize = SummonIconSize * Mathf.Lerp(MinimumSummonCursorScale, 1f, mapView.ZoomProgress);
+            summonCursor.rectTransform.sizeDelta = new Vector2(cursorSize, cursorSize);
+
+            if (!mouse.leftButton.wasPressedThisFrame)
+            {
+                return;
+            }
+
+            // 현재 좌표의 UI를 직접 검사해 버튼 클릭의 지도 전달 방지
+            summonPointer.position = screenPosition;
+            summonRaycasts.Clear();
+            EventSystem.current.RaycastAll(summonPointer, summonRaycasts);
+
+            if (summonRaycasts.Count != 0)
+            {
+                return;
+            }
+
+            if (mapView.TrySummon(screenPosition, summonSelection == SummonSelection.Zombie))
+            {
+                RefreshSummary();
+            }
+        }
+
+
+        // 같은 버튼 재선택 해제와 다른 유형 선택의 단일 상태 전환
+        private void ToggleSummonSelection(SummonSelection selection)
+        {
+            // 기존 선택과 요청 선택 비교 후 버튼 및 커서 동기화
+            SetSummonSelection(summonSelection == selection ? SummonSelection.None : selection);
+        }
+
+
+        // 소환 선택에 따른 외곽선과 지도 드래그 및 커서 동기화
+        private void SetSummonSelection(SummonSelection selection)
+        {
+            // 단일 선택값에서 두 버튼의 활성 표시 도출
+            summonSelection = selection;
+            mapView.IsSummoning = selection != SummonSelection.None;
+            humanOutline.enabled = selection == SummonSelection.Human;
+            zombieOutline.enabled = selection == SummonSelection.Zombie;
+            summonCursor.gameObject.SetActive(selection != SummonSelection.None);
+
+            if (selection != SummonSelection.None)
+            {
+                summonCursor.sprite = mapView.GetUnitIcon(selection == SummonSelection.Zombie);
+            }
+        }
+
+
+        // 기존 인구 데이터에서 지도 요약 표시 갱신
+        private void RefreshSummary()
+        {
+            // 생성과 소환이 공유하는 데이터의 현재 인구 표시
+            var map = mapView.Map;
+            summaryLabel.text = $"섬 전체 지역  |  {map.Size} × {map.Size}  |  건물 {map.Buildings.Count}채\n인간 {map.Humans.Count} · 좀비 {map.Zombies.Count}  |  드래그 이동 · 휠 확대";
+        }
+
+
+        // 소환 버튼의 유형별 픽셀 아이콘과 선택 외곽선 구성
+        private Outline MakeSummonButton(Transform parent, string title, Vector2 position, SummonSelection selection)
+        {
+            // 기존 버튼 생성 기능 재사용 후 아이콘과 텍스트 영역 분리
+            var buttonSize = new Vector2(144, 72);
+            var button = MakeButton(parent, title, position, buttonSize, () => ToggleSummonSelection(selection));
+            var text = button.GetComponentInChildren<TMP_Text>();
+            text.rectTransform.anchoredPosition = new Vector2(SummonIconSize, 0);
+            text.rectTransform.sizeDelta = new Vector2(buttonSize.x - SummonIconSize, buttonSize.y);
+            var iconRect = Rect("Unit Icon", button.transform, new Vector2(0, .5f), new Vector2(0, .5f), Vector2.zero,
+                new Vector2(SummonIconSize, SummonIconSize));
+            var icon = iconRect.gameObject.AddComponent<Image>();
+            icon.sprite = mapView.GetUnitIcon(selection == SummonSelection.Zombie);
+            icon.raycastTarget = false;
+            var outline = button.gameObject.AddComponent<Outline>();
+            outline.effectColor = SummonOutlineColor;
+            outline.effectDistance = new Vector2(SummonOutlineWidth, -SummonOutlineWidth);
+            outline.enabled = false;
+            return outline;
         }
 
 
@@ -206,10 +357,25 @@ namespace RotWorld
                 events.transform.SetParent(transform, false);
             }
 
+            interfaceRect = canvasRect;
+            summonPointer = new PointerEventData(EventSystem.current);
+
             // 지도 도구 모음과 요약 표시 영역 구성
-            var bar = Rect("Bottom Toolbar", canvasRect, new Vector2(0, 0), Vector2.zero, Vector2.zero, new Vector2(0, 64));
+            var bar = Rect("Bottom Toolbar", canvasRect, new Vector2(0, 0), Vector2.zero, Vector2.zero, new Vector2(0, BottomToolbarHeight));
+            bottomToolbar = bar.gameObject;
             bar.anchorMax = new Vector2(1, 0);
             Background(bar, PanelColor);
+
+            // 기존 도구 모음 바로 위에 높이 100의 소환 패널 배치 및 맵 생성 전 숨김
+            var unitPanel = Rect("Unit Summon Panel", bar, new Vector2(0, 1), Vector2.zero, Vector2.zero,
+                new Vector2(0, UnitPanelHeight));
+            unitPanel.anchorMax = Vector2.one;
+            Background(unitPanel, PanelColor);
+            unitSummonPanel = unitPanel.gameObject;
+            unitSummonPanel.SetActive(false);
+            humanOutline = MakeSummonButton(unitPanel, "인간 소환", new Vector2(20, -14), SummonSelection.Human);
+            zombieOutline = MakeSummonButton(unitPanel, "좀비 소환", new Vector2(180, -14), SummonSelection.Zombie);
+
             summaryLabel = Label(bar, "새로운 도시를 만들어 주세요", new Vector2(22, -12), new Vector2(720, 40), 16);
             var tools = Rect("Map Tools", bar, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-18, -10), new Vector2(438, 44));
             MakeButton(tools, "축소", Vector2.zero, new Vector2(62, 44), () => mapView.ChangeZoom(-1));
@@ -237,6 +403,13 @@ namespace RotWorld
             MakeButton(dialog, "닫기", new Vector2(24, -472), new Vector2(108, 38), CloseDialog);
             generateButton = MakeButton(dialog, "생성", new Vector2(314, -472), new Vector2(128, 38), BeginGeneration);
             generationDialog.SetActive(false);
+
+            // 모든 UI보다 위에 표시하며 클릭을 가로채지 않는 커서 아이콘 구성
+            var cursorRect = Rect("Summon Cursor", canvasRect, new Vector2(.5f, .5f), new Vector2(.5f, .5f), Vector2.zero,
+                new Vector2(SummonIconSize, SummonIconSize));
+            summonCursor = cursorRect.gameObject.AddComponent<Image>();
+            summonCursor.raycastTarget = false;
+            summonCursor.gameObject.SetActive(false);
         }
 
 
@@ -244,6 +417,7 @@ namespace RotWorld
         private void OpenDialog()
         {
             // 설정창 활성화와 지도 입력 차단 상태 동기화
+            SetSummonSelection(SummonSelection.None);
             generationDialog.SetActive(true);
             mapView.IsInputBlocked = true;
         }
@@ -316,7 +490,9 @@ namespace RotWorld
             {
                 var map = CityGenerator.Generate(settings);
                 mapView.Show(map);
-                summaryLabel.text = $"섬 전체 지역  |  {map.Size} × {map.Size}  |  건물 {map.Buildings.Count}채\n인간 {map.Humans.Count} · 좀비 {map.Zombies.Count}  |  드래그 이동 · 휠 확대";
+                // 지도 표시 성공 후 소환 패널 표시 허용
+                unitSummonPanel.SetActive(true);
+                RefreshSummary();
                 welcomeLabel.gameObject.SetActive(false);
                 statusLabel.text = "생성 완료 · 시드 " + settings.Seed;
             }
@@ -345,6 +521,12 @@ namespace RotWorld
         // 비활성화 시 생성 핸들과 입력 차단 상태 정리
         private void OnDisable()
         {
+            // UI 구성 완료 상태에서 소환 모드와 커서 해제
+            if (summonCursor != null && mapView != null)
+            {
+                SetSummonSelection(SummonSelection.None);
+            }
+
             // 실행 중 생성 중단 후 버튼과 지도 입력 상태 복구
             if (generationCoroutine != null)
             {
