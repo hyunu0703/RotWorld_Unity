@@ -100,7 +100,9 @@ namespace RotWorld
         // 유형별 누적 피격 후 쓰러짐과 감염 변환 및 좀비 소멸 상태
         private const int HumanHitsToFall = 2;
         private const int ZombieHitsToFall = 5;
-        private const float ZombieFadeDuration = 5f;
+        private const float ZombieFadeStartDelay = 2f;
+        private const float ZombieFadeEndTime = 5f;
+        private const float ZombieDisintegrateDelay = 5f;
         private UnitDeathVisuals deathVisuals;
         private int hitCount;
         private bool isDowned;
@@ -184,9 +186,11 @@ namespace RotWorld
 
                 if (isZombie)
                 {
-                    walkAnimation.SetDeathProgress(deathVisuals == null ? null : deathVisuals.FadeFrames, downedElapsed / ZombieFadeDuration);
+                    // 쓰러진 뒤 2초부터 소멸 직전까지 공용 프레임으로 점진적인 흰색 전환
+                    float fadeProgress = Mathf.InverseLerp(ZombieFadeStartDelay, ZombieFadeEndTime, downedElapsed);
+                    walkAnimation.SetDeathProgress(deathVisuals == null ? null : deathVisuals.FadeFrames, fadeProgress);
 
-                    if (downedElapsed >= ZombieFadeDuration)
+                    if (downedElapsed >= ZombieDisintegrateDelay)
                     {
                         Disintegrate();
                     }
