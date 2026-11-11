@@ -59,6 +59,10 @@ namespace RotWorld
         private PointerEventData summonPointer;
         private readonly List<RaycastResult> summonRaycasts = new List<RaycastResult>();
         private const float SummonIconSize = 40f;
+        private const float SummonButtonSize = 72f;
+        private const float SummonButtonPadding = 6f;
+        private const float SummonButtonGap = 16f;
+        private const float SummonNameFontSize = 14f;
         private const float CursorClickDuration = .2f;
         private const float CursorClickScale = .6f;
         private float cursorClickRemaining;
@@ -243,13 +247,20 @@ namespace RotWorld
         // 소환 버튼의 유형별 픽셀 아이콘과 선택 외곽선 구성
         private Outline MakeSummonButton(Transform parent, string title, Vector2 position, SummonSelection selection)
         {
-            // 기존 버튼 생성 기능 재사용 후 아이콘과 텍스트 영역 분리
-            var buttonSize = new Vector2(144, 72);
+            // 기존 버튼 생성 기능을 통한 정사각형 유닛 칸 구성
+            var buttonSize = new Vector2(SummonButtonSize, SummonButtonSize);
             var button = MakeButton(parent, title, position, buttonSize, () => ToggleSummonSelection(selection));
+
+            // 칸 안쪽 우측 하단에 유닛 이름 배치
             var text = button.GetComponentInChildren<TMP_Text>();
-            text.rectTransform.anchoredPosition = new Vector2(SummonIconSize, 0);
-            text.rectTransform.sizeDelta = new Vector2(buttonSize.x - SummonIconSize, buttonSize.y);
-            var iconRect = Rect("Unit Icon", button.transform, new Vector2(0, .5f), new Vector2(0, .5f), Vector2.zero,
+            text.fontSize = SummonNameFontSize;
+            text.rectTransform.anchoredPosition = new Vector2(SummonButtonPadding, -SummonButtonPadding);
+            text.rectTransform.sizeDelta = buttonSize - Vector2.one * (SummonButtonPadding * 2f);
+            text.alignment = TextAlignmentOptions.BottomRight;
+
+            // 이름 위쪽에 기존 픽셀 아이콘 배치 및 선택 외곽선 연결
+            var iconRect = Rect("Unit Icon", button.transform, new Vector2(.5f, 1), new Vector2(.5f, 1),
+                new Vector2(0, -SummonButtonPadding),
                 new Vector2(SummonIconSize, SummonIconSize));
             var icon = iconRect.gameObject.AddComponent<Image>();
             icon.sprite = mapView.GetUnitIcon(selection == SummonSelection.Zombie);
@@ -410,8 +421,10 @@ namespace RotWorld
             Background(unitPanel, PanelColor);
             unitSummonPanel = unitPanel.gameObject;
             unitSummonPanel.SetActive(false);
-            humanOutline = MakeSummonButton(unitPanel, "인간 소환", new Vector2(20, -14), SummonSelection.Human);
-            zombieOutline = MakeSummonButton(unitPanel, "좀비 소환", new Vector2(180, -14), SummonSelection.Zombie);
+            var firstUnitPosition = new Vector2(20, -14);
+            humanOutline = MakeSummonButton(unitPanel, "인간", firstUnitPosition, SummonSelection.Human);
+            zombieOutline = MakeSummonButton(unitPanel, "좀비",
+                firstUnitPosition + new Vector2(SummonButtonSize + SummonButtonGap, 0), SummonSelection.Zombie);
 
             summaryLabel = Label(bar, "새로운 도시를 만들어 주세요", new Vector2(22, -12), new Vector2(720, 40), 16);
             var tools = Rect("Map Tools", bar, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-18, -10), new Vector2(438, 44));
