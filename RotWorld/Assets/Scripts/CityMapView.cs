@@ -52,6 +52,7 @@ namespace RotWorld
         private Sprite zombieIcon;
         private Sprite[] humanWalkFrames;
         private Sprite[] zombieWalkFrames;
+        private Sprite[] conversionFrames;
         private Transform summonedUnits;
 
         // 기존 씬 카메라와 표시 컴포넌트 연결
@@ -483,7 +484,7 @@ namespace RotWorld
             renderer.sprite = GetUnitIcon(zombie);
             renderer.sortingOrder = spriteRenderer.sortingOrder + 1;
             unit.AddComponent<UnitWalkAnimation>().Initialize(renderer, GetUnitWalkFrames(zombie));
-            unit.AddComponent<UnitWander>().Initialize(mapData, zombie, index);
+            unit.AddComponent<UnitWander>().Initialize(mapData, zombie, index, GetUnitWalkFrames(true), GetUnitConversionFrames());
         }
 
 
@@ -527,6 +528,86 @@ namespace RotWorld
             return frames;
         }
 
+
+        // 인간에서 좀비로 서서히 변하며 흰색으로 점멸하는 공용 프레임 생성
+        private Sprite[] GetUnitConversionFrames()
+        {
+            // 모든 개체에서 동일한 픽셀 변환 자원 공유
+            if (conversionFrames != null)
+            {
+                return conversionFrames;
+            }
+
+            const int FrameCount = 101;
+            const float ConversionDuration = 5f;
+            const float FirstFlashTime = 1f;
+            const float FlashInterval = 1f;
+            const float FlashDuration = .2f;
+            const int FlashCount = 4;
+            const float FlashStrength = 1f;
+            int size = PixelsPerTile * UnitPixelScale;
+            var human = new Color32[size * size];
+            var zombie = new Color32[size * size];
+            var origin = new System.Collections.Generic.List<Vector2Int> { Vector2Int.zero };
+            DrawPeople(human, size, origin, false);
+            DrawPeople(zombie, size, origin, true);
+            conversionFrames = new Sprite[FrameCount];
+            conversionFrames[0] = GetUnitIcon(false);
+            conversionFrames[FrameCount - 1] = GetUnitIcon(true);
+
+            for (int frame = 0; frame < FrameCount; frame++)
+            {
+                float progress = frame / (float)(FrameCount - 1);
+                // 일 초부터 사 초까지만 네 번 점멸하고 오 초에는 변환 완료
+                float elapsed = progress * ConversionDuration;
+                int flashIndex = Mathf.FloorToInt((elapsed - FirstFlashTime) / FlashInterval);
+                float flashTime = elapsed - FirstFlashTime - flashIndex * FlashInterval;
+                bool isFlashing = flashIndex >= 0 && flashIndex < FlashCount && flashTime >= 0f && flashTime < FlashDuration;
+                float pulse = isFlashing ? Mathf.Pow(Mathf.Cos(flashTime / FlashDuration * Mathf.PI * .5f), 2f) * FlashStrength : 0f;
+                var pixels = new Color32[human.Length];
+
+                for (int i = 0; i < pixels.Length; i++)
+                {
+                    // 투명 배경을 유지하고 불투명 몸체만 좀비 색상과 흰색으로 보간
+                    Color color = Color.Lerp(human[i], zombie[i], Mathf.SmoothStep(0f, 1f, progress));
+
+                    if (color.a > 0f)
+                    {
+                        color = Color.Lerp(color, Color.white, pulse);
+                    }
+
+                    pixels[i] = color;
+                }
+
+                var texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
+                texture.filterMode = FilterMode.Point;
+                texture.wrapMode = TextureWrapMode.Clamp;
+                texture.SetPixels32(pixels);
+                texture.Apply(false, true);
+                conversionFrames[frame] = Sprite.Create(texture, new Rect(0, 0, size, size), Vector2.zero, size);
+            }
+
+            return conversionFrames;
+        }
+
+
+        // 변환 전용 프레임 자원 해제
+        private void ReleaseConversionFrames()
+        {
+            // 시작과 완료 프레임을 포함한 변환 전용 자원 전체 해제
+            if (conversionFrames == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < conversionFrames.Length; i++)
+            {
+                Destroy(conversionFrames[i].texture);
+                Destroy(conversionFrames[i]);
+            }
+
+            conversionFrames = null;
+        }
 
         // 원본 아이콘을 제외한 걷기 전용 자원 해제
         private void ReleaseWalkFrames(Sprite[] frames)
@@ -582,6 +663,7 @@ namespace RotWorld
             ReleaseGraphics();
 
             // 유형별 걷기 전용 프레임과 공용 아이콘의 소유 자원 해제
+            ReleaseConversionFrames();
             ReleaseWalkFrames(humanWalkFrames);
             ReleaseWalkFrames(zombieWalkFrames);
 

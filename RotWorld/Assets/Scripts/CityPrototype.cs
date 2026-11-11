@@ -42,6 +42,7 @@ namespace RotWorld
         private GameObject generationDialog;
         private TMP_Text statusLabel;
         private TMP_Text summaryLabel;
+        private CityMap summaryMap;
         private TMP_Text welcomeLabel;
 
         // Q키로 함께 표시를 전환할 하단 도구 모음과 자식 패널
@@ -198,7 +199,30 @@ namespace RotWorld
         {
             // 생성과 소환이 공유하는 데이터의 현재 인구 표시
             var map = mapView.Map;
-            summaryLabel.text = $"섬 전체 지역  |  {map.Size} × {map.Size}  |  건물 {map.Buildings.Count}채\n인간 {map.Humans.Count} · 좀비 {map.Zombies.Count}  |  드래그 이동 · 휠 확대";
+
+            if (summaryMap != map)
+            {
+                if (summaryMap != null)
+                {
+                    summaryMap.PopulationChanged -= RefreshSummary;
+                }
+
+                summaryMap = map;
+                summaryMap.PopulationChanged += RefreshSummary;
+            }
+
+            summaryLabel.text = $"섬 전체 지역  |  {map.Size} × {map.Size}  |  건물 {map.Buildings.Count}채\n인간 {map.HumanCount} · 좀비 {map.Zombies.Count}  |  드래그 이동 · 휠 확대";
+        }
+
+
+        // UI 종료 시 현재 지도 인구 변경 구독 해제
+        private void OnDestroy()
+        {
+            // 지도 수명과 독립된 UI 콜백 정리
+            if (summaryMap != null)
+            {
+                summaryMap.PopulationChanged -= RefreshSummary;
+            }
         }
 
 

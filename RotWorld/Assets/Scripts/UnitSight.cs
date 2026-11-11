@@ -23,7 +23,7 @@ namespace RotWorld
         public static int FindChaseHuman(CityMap map, Vector2 observer, int currentTarget)
         {
             // 기존 대상은 8타일과 건물 차폐 조건을 만족하는 동안 유지
-            if (currentTarget >= 0 && currentTarget < map.Humans.Count)
+            if (currentTarget >= 0 && currentTarget < map.Humans.Count && !map.InactiveHumans.Contains(currentTarget))
             {
                 Vector2 target = map.HumanPositions.TryGetValue(currentTarget, out Vector2 livePosition) ? livePosition : (Vector2)map.Humans[currentTarget];
 
@@ -56,6 +56,11 @@ namespace RotWorld
 
             for (int i = 0; i < units.Count; i++)
             {
+
+                if (units == map.Humans && map.InactiveHumans.Contains(i))
+                {
+                    continue;
+                }
 
                 var livePositions = units == map.Humans ? map.HumanPositions : map.ZombiePositions;
                 Vector2 target = livePositions.TryGetValue(i, out Vector2 livePosition) ? livePosition : (Vector2)units[i];

@@ -15,7 +15,11 @@ namespace RotWorld
 
         // 공용 프레임과 개체 렌더러 및 누적 이동 거리
         private SpriteRenderer visual;
+        private int humanSortingOrder;
+        private bool isZombieVisual;
+        private const int ZombieSortingOffset = 1;
         private Sprite[] frames;
+        private bool isHitVisible;
         private float distance;
         private float knockbackHeight;
         private Vector2 attackOffset;
@@ -32,8 +36,20 @@ namespace RotWorld
             }
 
             this.visual = visual;
+            humanSortingOrder = visual.sortingOrder;
             this.frames = frames;
             Stop();
+        }
+
+
+        // 유형별 표시 우선순위와 개체 색상 초기화
+        public void SetUnitType(bool zombie)
+        {
+            // 좀비는 모든 인간 피격 및 변환 표시보다 앞에 렌더링
+            isZombieVisual = zombie;
+            visual.sortingOrder = humanSortingOrder + (zombie ? ZombieSortingOffset : 0);
+            isHitVisible = false;
+            visual.color = Color.white;
         }
 
 
@@ -54,11 +70,49 @@ namespace RotWorld
         }
 
 
+        // 두 번째 피격 후 몸체가 옆으로 쓰러지는 연출
+        public void SetFallProgress(float progress)
+        {
+            // 논리 위치를 유지한 채 표시 몸체만 회전
+            visual.transform.localRotation = Quaternion.Euler(0f, 0f, 90f * Mathf.SmoothStep(0f, 1f, progress));
+        }
+
+
+        // 변환 진행도에 맞춰 점진적인 색상 변화와 흰색 점멸 표시
+        public void SetConversionProgress(Sprite[] conversionFrames, float progress)
+        {
+            // 사전 생성된 공용 픽셀 프레임만 교체해 개체별 텍스처 생성 방지
+            if (isZombieVisual || conversionFrames == null || conversionFrames.Length == 0)
+            {
+                return;
+            }
+
+            int frame = Mathf.RoundToInt(Mathf.Clamp01(progress) * (conversionFrames.Length - 1));
+            visual.sprite = conversionFrames[frame];
+            visual.color = isHitVisible ? HitColor : Color.white;
+        }
+
+
+        // 공용 좀비 프레임으로 교체 후 일어서는 변환 연출
+        public void ChangeToZombie(Sprite[] zombieFrames)
+        {
+            // 기존 렌더러를 재사용해 중복 개체 생성 방지
+            SetUnitType(true);
+            frames = zombieFrames;
+            knockbackHeight = 0f;
+            attackOffset = Vector2.zero;
+            SetHitColor(false);
+            Stop();
+            ApplyVisualPosition();
+        }
+
+
         // 피격 중 빨간색과 원래 스프라이트 색상 전환
         public void SetHitColor(bool hit)
         {
             // 공용 텍스처 대신 개체 렌더러 색상만 변경
-            visual.color = hit ? HitColor : Color.white;
+            isHitVisible = hit && !isZombieVisual;
+            visual.color = isHitVisible ? HitColor : Color.white;
         }
 
 
@@ -92,7 +146,7 @@ namespace RotWorld
         // 비활성화 시 시각 오프셋 복원
         private void OnDisable()
         {
-            // 중단된 피격 도약이 표시 위치에 남지 않도록 정리
+// 중단된 피격 도약이 표시 위치에 남지 않도록 정리
             knockbackHeight = 0f;
             attackOffset = Vector2.zero;
 

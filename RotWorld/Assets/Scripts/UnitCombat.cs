@@ -47,7 +47,7 @@ namespace RotWorld
         public bool TryAttack(int targetIndex, Vector2 position)
         {
             // 준비되지 않은 대상과 재공격 대기 및 건물 차폐 검사
-            if (!isZombie || BlocksMovement || cooldown > 0f || !map.HumanUnits.TryGetValue(targetIndex, out var human) || human == null ||
+            if (!isZombie || BlocksMovement || cooldown > 0f || !map.HumanUnits.TryGetValue(targetIndex, out var human) || human == null || !human.IsHumanTarget ||
                 Vector2.Distance(position, human.Position) > GrabRange + DistanceTolerance || !UnitSight.HasLineOfSight(map, position, human.Position))
             {
                 return false;
@@ -104,6 +104,12 @@ namespace RotWorld
                     UnitSight.HasLineOfSight(map, movement.Position, victim.Position))
                 {
                     victim.ReceiveHit(attackDirection);
+
+                    // 두 번째 타격 콜백에서 공격이 취소되면 회복 대기를 다시 설정하지 않도록 즉시 종료
+                    if (!isAttacking)
+                    {
+                        return;
+                    }
                 }
 
                 if (victim != null)
@@ -125,6 +131,38 @@ namespace RotWorld
                 victim = null;
                 animationView.SetAttackOffset(Vector2.zero);
             }
+        }
+
+
+        // 사라진 인간에 대한 공격과 붙잡힘 해제
+        public void CancelHumanTarget(UnitWander human)
+        {
+            // 현재 공격 대상이 일치할 때만 공격 중단
+            if (victim != human)
+            {
+                return;
+            }
+
+            victim.ReleaseGrab(this);
+            victim = null;
+            isAttacking = false;
+            pursuitDelayRemaining = 0f;
+            animationView.SetAttackOffset(Vector2.zero);
+        }
+
+
+        // 변환된 개체의 전투 상태를 좀비로 전환
+        public void BecomeZombie()
+        {
+            // 인간 피격 표시와 이전 공격 상태 초기화
+            isZombie = true;
+            flashRemaining = 0f;
+            isAttacking = false;
+            hasHit = false;
+            victim = null;
+            pursuitDelayRemaining = 0f;
+            cooldown = AttackInterval;
+            animationView.SetHitColor(false);
         }
 
 
