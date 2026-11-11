@@ -18,8 +18,11 @@ namespace RotWorld
         private const float AttackVisualOffset = .15f;
 
         // 인간의 좀비 반격 거리와 재공격 간격
-        private const float HumanAttackRange = 1f;
+        internal const float HumanAttackRange = 1.1f;
         private const float HumanAttackInterval = 5f;
+        private const float CooperativeAttackInterval = 3f;
+        private bool isCooperativeSupport;
+        private float CurrentHumanAttackInterval => isCooperativeSupport ? CooperativeAttackInterval : HumanAttackInterval;
 
         // 소유 유닛과 공격 대상 및 표시 참조
         private UnitWander movement;
@@ -33,8 +36,10 @@ namespace RotWorld
         private float flashRemaining;
         private bool isAttacking;
         private bool hasHit;
+        private bool isCooperativeAttack;
         private Vector2 attackDirection;
-        public bool BlocksMovement => isAttacking || pursuitDelayRemaining > 0f;
+        internal bool CanMoveDuringAttack => isAttacking && isCooperativeAttack && !hasHit && attackTime < Windup;
+        public bool BlocksMovement => (isAttacking && !CanMoveDuringAttack) || pursuitDelayRemaining > 0f;
         private float AttackRange => isZombie ? GrabRange : HumanAttackRange;
 
         // 기존 이동 및 공용 지도와 전투 표시 연결
@@ -69,8 +74,8 @@ namespace RotWorld
         }
 
 
-        // 반격 범위 안의 가장 가까운 좀비에게 공격 시작
-        public bool TryAttackZombie(Vector2 position)
+        // 지정 좀비 또는 반격 범위 안의 가장 가까운 좀비에게 공격 시작
+        public bool TryAttackZombie(Vector2 position, UnitWander requiredTarget = null)
         {
             // 좀비 개체와 공격 진행 및 재공격 대기 중에는 탐색 생략
             if (isZombie || isAttacking || cooldown > 0f)
@@ -84,7 +89,7 @@ namespace RotWorld
 
             foreach (var zombie in map.ZombieUnits.Values)
             {
-                if (zombie == null || !zombie.IsZombieTarget)
+                if (zombie == null || !zombie.IsZombieTarget || (requiredTarget != null && zombie != requiredTarget))
                 {
                     continue;
                 }
@@ -105,8 +110,23 @@ namespace RotWorld
                 return false;
             }
 
-            BeginAttack(target, position, HumanAttackInterval);
+            BeginAttack(target, position, CurrentHumanAttackInterval);
+            isCooperativeAttack = requiredTarget != null;
             return true;
+        }
+
+
+        // 지원 역할 전환 시 인간 공격 간격 변경과 남은 쿨타임 초기화
+        internal void SetCooperativeSupport(bool isSupport)
+        {
+            // 좀비와 같은 역할의 반복 통지로 인한 쿨타임 초기화 제외
+            if (isZombie || isCooperativeSupport == isSupport)
+            {
+                return;
+            }
+
+            isCooperativeSupport = isSupport;
+            cooldown = 0f;
         }
 
 
@@ -115,6 +135,7 @@ namespace RotWorld
         {
             // 좀비와 인간이 같은 준비 및 회복 연출을 공유하고 유형별 재공격 간격만 적용
             victim = target;
+            isCooperativeAttack = false;
             attackDirection = (target.Position - position).normalized;
             attackTime = 0f;
             hasHit = false;
@@ -142,6 +163,19 @@ namespace RotWorld
             if (!isAttacking)
             {
                 return;
+            }
+
+            // 지원 중 새 위협이 발생하면 이동 컴포넌트 실행 순서와 무관하게 타격 취소
+            if (isCooperativeAttack && !movement.CanContinueCooperativeAttack())
+            {
+                CancelAttack();
+                return;
+            }
+
+            // 이동 공격의 준비와 타격 방향을 지정 좀비의 최신 위치에 맞춰 갱신
+            if (CanMoveDuringAttack && victim != null)
+            {
+                attackDirection = (victim.Position - movement.Position).normalized;
             }
 
             attackTime += Time.deltaTime;
@@ -215,6 +249,7 @@ namespace RotWorld
             victim = null;
             isAttacking = false;
             hasHit = false;
+            isCooperativeAttack = false;
             pursuitDelayRemaining = 0f;
             animationView.SetAttackOffset(Vector2.zero);
         }
@@ -226,6 +261,7 @@ namespace RotWorld
             // 인간 피격 표시와 이전 공격 상태 초기화
             CancelAttack();
             isZombie = true;
+            isCooperativeSupport = false;
             flashRemaining = 0f;
             cooldown = AttackInterval;
             animationView.SetHitColor(false);
