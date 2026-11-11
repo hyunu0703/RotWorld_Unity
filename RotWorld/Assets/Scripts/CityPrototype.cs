@@ -177,12 +177,11 @@ namespace RotWorld
         }
 
 
-        // 소환 선택에 따른 외곽선과 지도 드래그 및 커서 동기화
+        // 소환 선택에 따른 외곽선과 커서 동기화
         private void SetSummonSelection(SummonSelection selection)
         {
             // 단일 선택값에서 두 버튼의 활성 표시 도출
             summonSelection = selection;
-            mapView.IsSummoning = selection != SummonSelection.None;
             humanOutline.enabled = selection == SummonSelection.Human;
             zombieOutline.enabled = selection == SummonSelection.Zombie;
             summonCursor.gameObject.SetActive(selection != SummonSelection.None);

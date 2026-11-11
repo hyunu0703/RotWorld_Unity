@@ -47,8 +47,7 @@ namespace RotWorld
         private bool isDragging;
         public bool IsInputBlocked { get; set; }
 
-        // 소환 중 지도 드래그 차단과 유형별 공용 아이콘 자원
-        public bool IsSummoning { get; set; }
+        // 유형별 공용 소환 아이콘과 소환 개체 보관
         private Sprite humanIcon;
         private Sprite zombieIcon;
         private Transform summonedUnits;
@@ -371,17 +370,12 @@ namespace RotWorld
             // UI 위 입력으로 지도 드래그 시작과 휠 확대 방지
             bool overUi = EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
 
-            if (mouse.leftButton.wasPressedThisFrame)
+            if (mouse.rightButton.wasPressedThisFrame)
             {
-                isDragging = !overUi && !IsSummoning;
+                isDragging = !overUi;
             }
 
-            if (mouse.leftButton.wasReleasedThisFrame)
-            {
-                isDragging = false;
-            }
-
-            if (IsSummoning)
+            if (mouse.rightButton.wasReleasedThisFrame)
             {
                 isDragging = false;
             }
