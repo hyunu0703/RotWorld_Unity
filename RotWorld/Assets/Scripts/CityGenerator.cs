@@ -100,6 +100,8 @@ namespace RotWorld
         public List<CityBuilding> Buildings { get; } = new List<CityBuilding>();
         // 감지와 추적에서 사용할 실제 이동 좌표와 구간 목적지
         // 추격 시 인간의 실제 이동속도 공유
+        // 근접 타격을 전달할 인간 이동 컴포넌트
+        internal Dictionary<int, UnitWander> HumanUnits { get; } = new Dictionary<int, UnitWander>();
         internal Dictionary<int, float> HumanSpeeds { get; } = new Dictionary<int, float>();
         internal Dictionary<int, Vector2> HumanPositions { get; } = new Dictionary<int, Vector2>();
         internal Dictionary<int, Vector2> ZombiePositions { get; } = new Dictionary<int, Vector2>();

@@ -10,6 +10,7 @@ namespace RotWorld
         // 이동 거리 기준 보폭과 네 단계 걷기 프레임 순서
         private const float StrideLength = .8f;
         private const float MirrorOffset = .875f;
+        private static readonly Color HitColor = new Color32(160, 0, 0, 255);
         private static readonly int[] FrameSequence = { 0, 1, 0, 2 };
 
         // 공용 프레임과 개체 렌더러 및 누적 이동 거리
@@ -48,6 +49,22 @@ namespace RotWorld
             distance = Mathf.Repeat(distance + travelled, StrideLength);
             int phase = Mathf.FloorToInt(distance / StrideLength * FrameSequence.Length);
             visual.sprite = frames[FrameSequence[phase]];
+        }
+
+
+        // 피격 중 빨간색과 원래 스프라이트 색상 전환
+        public void SetHitColor(bool hit)
+        {
+            // 공용 텍스처 대신 개체 렌더러 색상만 변경
+            visual.color = hit ? HitColor : Color.white;
+        }
+
+
+        // 논리 위치를 바꾸지 않는 공격 준비와 타격 오프셋 표시
+        public void SetAttackOffset(Vector2 offset)
+        {
+            // 좌우 반전 기준 위치에 공격 모션만 합성
+            visual.transform.localPosition = (visual.flipX ? Vector3.right * MirrorOffset : Vector3.zero) + (Vector3)offset;
         }
 
 

@@ -11,7 +11,7 @@ namespace RotWorld
         // 유형별 기본 능력치와 개체 속도 편차
         [SerializeField] private float humanSpeed = 1.8f;
         [SerializeField] private float zombieSpeed = 1.2f;
-        [SerializeField] private float zombieChaseSpeed = 2.6f;
+        [SerializeField] private float zombieChaseSpeed = 2.0f;
         private const float MinimumSpeedVariation = .85f;
         private const float MaximumSpeedVariation = 1.15f;
         private const float MinimumRest = 1f;
@@ -48,6 +48,20 @@ namespace RotWorld
         private const float MaximumSubstep = .1f;
         private readonly List<Vector2Int> reservations = new List<Vector2Int>();
 
+        // 공격 중 이동 차단과 피격 후 비중첩 감속 및 넉백
+        private UnitCombat combat;
+        private UnitCombat grabOwner;
+        public bool IsGrabbed => grabOwner != null;
+        private bool hasBeenHit;
+        private float knockbackRemaining;
+        private int knockbackFinishedFrame = -1;
+        public bool HasResumedAfterKnockback => knockbackRemaining <= 0f && Time.frameCount > knockbackFinishedFrame + 1;
+        private Vector2 knockbackDirection;
+        private const float InjuredSpeedMultiplier = .8f;
+        private const float KnockbackSpeed = 5f;
+        private const float KnockbackDistance = .3f;
+        public Vector2 Position => position;
+
         // 기존 인구 데이터와 이동 및 걷기 표시 연결
         public void Initialize(CityMap map, bool zombie, int index)
         {
@@ -63,6 +77,13 @@ namespace RotWorld
 
             this.map = map;
             isZombie = zombie;
+            combat = gameObject.AddComponent<UnitCombat>();
+            combat.Initialize(this, map, zombie, walkAnimation);
+
+            if (!zombie)
+            {
+                map.HumanUnits[index] = this;
+            }
             population = units;
             populationIndex = index;
             currentTile = units[index];
@@ -84,10 +105,29 @@ namespace RotWorld
                 return;
             }
 
+            // 공격 준비 중 붙잡힌 인간은 도주와 걷기 모션 중지
+            if (IsGrabbed)
+            {
+                walkAnimation.Stop();
+                return;
+            }
+
+            if (knockbackRemaining > 0f)
+            {
+                UpdateKnockback();
+                return;
+            }
+
+            if (combat.BlocksMovement)
+            {
+                walkAnimation.Stop();
+                return;
+            }
+
             // 추격 속도 보정에 사용할 인간의 실제 지형 속도 공유
             if (!isZombie)
             {
-                map.HumanSpeeds[populationIndex] = humanSpeed * speedVariation * UnitPathfinder.SpeedMultiplier(map, currentTile);
+                map.HumanSpeeds[populationIndex] = humanSpeed * (hasBeenHit ? InjuredSpeedMultiplier : 1f) * speedVariation * UnitPathfinder.SpeedMultiplier(map, currentTile);
             }
 
             UpdateReaction();
@@ -126,7 +166,7 @@ namespace RotWorld
             {
                 Vector2Int target = path[pathIndex];
                 // 구간 시작 전 전체 이동 영역 확보로 교차 및 맞교환 차단
-                if (position == (Vector2)currentTile && !TryReserve(target))
+                if (reservations.Count == 0 && !TryReserve(target))
                 {
                     // 점유 변경 시 같은 프레임에 우회 경로 재탐색 후 이동 재시도
                     hasChasePath = false;
@@ -160,7 +200,7 @@ namespace RotWorld
                 direction = (Vector2)target - position;
                 float distance = direction.magnitude;
                 // 감지 중인 좀비만 추적 기본 속도 적용 및 기존 개체 편차와 지형 배율 유지
-                float baseSpeed = isZombie ? (chaseTarget >= 0 ? zombieChaseSpeed : zombieSpeed) : humanSpeed;
+                float baseSpeed = isZombie ? (chaseTarget >= 0 ? zombieChaseSpeed : zombieSpeed) : humanSpeed * (hasBeenHit ? InjuredSpeedMultiplier : 1f);
                 float terrainSpeed = baseSpeed * speedVariation * UnitPathfinder.SpeedMultiplier(map, currentTile);
                 float step = Mathf.Min(distance, remainingTime * terrainSpeed);
                 Vector2 nextPosition = Vector2.MoveTowards(position, target, step);
@@ -226,7 +266,7 @@ namespace RotWorld
             }
 
             // 진행 중인 인접 구간을 마친 뒤 경로 교체로 건물 모서리 관통 방지
-            if (position != (Vector2)currentTile)
+            if (reservations.Count > 0)
             {
                 return;
             }
@@ -279,6 +319,105 @@ namespace RotWorld
         }
 
 
+        // 공격 준비 동안 인간 이동을 금지하는 붙잡기 시작
+        public bool TryGrab(UnitCombat owner)
+        {
+            // 기존 소유자와 넉백 중 재포획 및 비활성 대상 거부
+            if (isZombie || !isActiveAndEnabled || owner == null || IsGrabbed || knockbackRemaining > 0f)
+            {
+                return false;
+            }
+
+            grabOwner = owner;
+            ReleaseReservations();
+            map.ReleaseTile(currentTile);
+            currentTile = Vector2Int.RoundToInt(position);
+            map.OccupyTile(currentTile);
+            path.Clear();
+            pathIndex = 0;
+            hasChasePath = false;
+            walkAnimation.Stop();
+            PublishPosition();
+            return true;
+        }
+
+
+        // 타격 또는 공격 중단 후 소유자의 붙잡힘만 해제
+        public void ReleaseGrab(UnitCombat owner)
+        {
+            // 다른 공격자의 붙잡힘을 임의 해제하지 않도록 소유자 확인
+            if (grabOwner != owner)
+            {
+                return;
+            }
+
+            grabOwner = null;
+            detectionRemaining = 0f;
+            restRemaining = 0f;
+        }
+
+        // 인간 피격의 최초 감속과 지정 거리 넉백 시작
+        public void ReceiveHit(Vector2 direction)
+        {
+            // 좀비에 대한 피격 요청 무시 및 중복 감속 방지
+            if (isZombie || map == null)
+            {
+                return;
+            }
+
+            hasBeenHit = true;
+            ReleaseReservations();
+            map.ReleaseTile(currentTile);
+            currentTile = Vector2Int.RoundToInt(position);
+            map.OccupyTile(currentTile);
+            path.Clear();
+            pathIndex = 0;
+            hasChasePath = false;
+            knockbackDirection = direction.sqrMagnitude > 0f ? direction.normalized : Vector2.right;
+            knockbackRemaining = KnockbackDistance;
+            knockbackFinishedFrame = -1;
+            combat.FlashHit();
+            walkAnimation.Stop();
+        }
+
+
+        // 장애물과 유닛을 관통하지 않는 넉백 이동
+        private void UpdateKnockback()
+        {
+            // 설정된 넉백 거리만 소비하고 막힌 위치에서 중단
+            float remaining = Mathf.Min(knockbackRemaining, KnockbackSpeed * Time.deltaTime);
+
+            while (remaining > 0f)
+            {
+                float step = Mathf.Min(remaining, MaximumSubstep);
+                Vector2 next = position + knockbackDirection * step;
+
+                if (!CanPursueStep(next))
+                {
+                    knockbackRemaining = 0f;
+                    break;
+                }
+
+                map.ReleaseTile(currentTile);
+                currentTile = Vector2Int.RoundToInt(next);
+                map.OccupyTile(currentTile);
+                position = next;
+                remaining -= step;
+                knockbackRemaining = Mathf.Max(0f, knockbackRemaining - step);
+            }
+
+            if (knockbackRemaining <= 0f)
+            {
+                knockbackFinishedFrame = Time.frameCount;
+            }
+
+            population[populationIndex] = currentTile;
+            PublishPosition();
+            transform.localPosition = new Vector3(position.x, position.y, 0f);
+            detectionRemaining = 0f;
+            restRemaining = 0f;
+        }
+
         // 지형과 개체 편차 반영 후 인간보다 빠른 추적 속도 계산
         internal static float CalculatePursuitSpeed(float configuredSpeed, float humanActualSpeed)
         {
@@ -303,6 +442,11 @@ namespace RotWorld
             }
 
             bool hasTarget = chaseTarget >= 0;
+
+            if (hasTarget && combat.TryAttack(chaseTarget, position))
+            {
+                return;
+            }
             Vector2 target = hasTarget && map.HumanPositions.TryGetValue(chaseTarget, out Vector2 live)
                 ? live : hasTarget ? (Vector2)map.Humans[chaseTarget] : currentTile;
             float baseSpeed = (hasTarget ? zombieChaseSpeed : zombieSpeed) * speedVariation * UnitPathfinder.SpeedMultiplier(map, currentTile);
@@ -335,7 +479,7 @@ namespace RotWorld
             while (remaining > 0f)
             {
                 float distance = Vector2.Distance(position, waypoint);
-                float available = hasTarget && waypoint == target ? Mathf.Max(0f, distance - SeparationDistance) : distance;
+                float available = hasTarget && waypoint == target ? Mathf.Max(0f, distance - UnitCombat.GrabRange) : distance;
                 float step = Mathf.Min(remaining, MaximumSubstep, available);
 
                 if (step <= 0f)
@@ -350,7 +494,7 @@ namespace RotWorld
                 if (!CanPursueStep(next))
                 {
                     // 목표에 충분히 접근한 경우 회전하지 않고 최소 간격 유지
-                    if (hasTarget && Vector2.Distance(position, target) <= SeparationDistance + MaximumSubstep * 2f)
+                    if (hasTarget && Vector2.Distance(position, target) <= UnitCombat.GrabRange + MaximumSubstep * 2f)
                     {
                         break;
                     }
@@ -403,6 +547,12 @@ namespace RotWorld
                 walkAnimation.Stop();
             }
 
+            // 이동 직후 붙잡기 검사로 다음 프레임 인간 이동에 의한 공격 누락 방지
+            if (hasTarget)
+            {
+                combat.TryAttack(chaseTarget, position);
+            }
+
             if (chaseTarget < 0 && position == (Vector2)currentTile)
             {
                 isDirectPursuit = false;
@@ -446,13 +596,20 @@ namespace RotWorld
         }
 
 
-        // 인간과 다른 좀비의 실제 위치에서 최소 간격 검사
+        // 추적 대상만 붙잡기 거리까지 접근 허용하고 나머지 유닛 간격 유지
         private bool HasUnitClearance(Vector2 next)
         {
-            // 이동 중인 상대의 연속 좌표로 겹침 방지
+            // 이미 근접한 상대와는 멀어지는 이동과 넉백을 허용
             foreach (var human in map.HumanPositions)
             {
-                if ((isZombie || human.Key != populationIndex) && Vector2.Distance(next, human.Value) < SeparationDistance)
+                if (!isZombie && human.Key == populationIndex)
+                {
+                    continue;
+                }
+
+                float clearance = isZombie && human.Key == chaseTarget ? UnitCombat.GrabRange : SeparationDistance;
+
+                if (!CanSeparateFrom(position, next, human.Value, clearance))
                 {
                     return false;
                 }
@@ -460,7 +617,7 @@ namespace RotWorld
 
             foreach (var zombie in map.ZombiePositions)
             {
-                if ((!isZombie || zombie.Key != populationIndex) && Vector2.Distance(next, zombie.Value) < SeparationDistance)
+                if ((!isZombie || zombie.Key != populationIndex) && !CanSeparateFrom(position, next, zombie.Value, SeparationDistance))
                 {
                     return false;
                 }
@@ -469,6 +626,16 @@ namespace RotWorld
             return true;
         }
 
+
+        // 최소 간격 안에서는 더 가까워지는 이동만 차단
+        internal static bool CanSeparateFrom(Vector2 from, Vector2 next, Vector2 other, float clearance)
+        {
+            // 붙잡힘 해제 후 짧은 넉백으로도 안전하게 도주 재개
+            const float DistanceTolerance = .00001f;
+            float nextDistance = (next - other).sqrMagnitude;
+            return nextDistance + DistanceTolerance >= clearance * clearance ||
+                nextDistance > (from - other).sqrMagnitude;
+        }
 
         // 감지와 추적에서 참조할 실제 좌표 및 구간 목적지 공유
         private void PublishPosition()
@@ -546,6 +713,7 @@ namespace RotWorld
                 {
                     map.HumanDestinations.Remove(populationIndex);
                     map.HumanSpeeds.Remove(populationIndex);
+                    map.HumanUnits.Remove(populationIndex);
                 }
             }
         }
