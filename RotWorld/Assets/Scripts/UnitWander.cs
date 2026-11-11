@@ -49,7 +49,7 @@ namespace RotWorld
         private bool isDirectPursuit;
         private Vector2? wanderExitTarget;
         internal const float SeparationDistance = .9f;
-        private const float PursuitSpeedAdvantage = 1.10f;
+        private const float PursuitSpeedAdvantage = 1.05f;
         private const float MaximumSubstep = .1f;
         private readonly List<Vector2Int> reservations = new List<Vector2Int>();
 
