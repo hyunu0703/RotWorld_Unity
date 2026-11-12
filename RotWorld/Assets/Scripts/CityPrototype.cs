@@ -49,6 +49,31 @@ namespace RotWorld
         private GameObject bottomToolbar;
         private GameObject unitSummonPanel;
 
+        // 하단 시간 제어의 배속 선택과 벡터 아이콘 보관
+        private static readonly float[] SimulationSpeeds = { 1f, 0f, 2f, 4f, 8f };
+        private static readonly string[] SimulationSpeedNames = { "실행", "일시정지", "2배속", "4배속", "8배속" };
+        private static readonly SimulationTimeIcon.Shape[] SimulationIconShapes =
+        {
+            SimulationTimeIcon.Shape.Play, SimulationTimeIcon.Shape.Pause, SimulationTimeIcon.Shape.FastForward,
+            SimulationTimeIcon.Shape.TripleFastForward, SimulationTimeIcon.Shape.Lightning
+        };
+        private const float TimeButtonWidth = 62f;
+        private const float TimeButtonHeight = 44f;
+        private const float TimeButtonGap = 6f;
+        private const float TimeControlsRightInset = 520f;
+        private const float TimeIconWidth = 20f;
+        private const float TimeIconHeight = 12f;
+        private const float LightningIconWidth = 12f;
+        private const float LightningIconHeight = 20f;
+        private const float PauseIconWidth = 24f;
+        private const float PauseIconHeight = 16f;
+        private const float TimeSpeedFontSize = 15f;
+        private static readonly Color SelectedTimeColor = new Color32(255, 217, 92, 255);
+        private readonly Outline[] timeSelectionOutlines = new Outline[5];
+        private readonly SimulationTimeIcon[] timeIcons = new SimulationTimeIcon[5];
+        private readonly TMP_Text[] timeSpeedLabels = new TMP_Text[5];
+        private bool hasTimeControls;
+
         // 단일 소환 선택과 버튼 외곽선 및 커서 표시
         private enum SummonSelection { None, Human, Zombie }
         private SummonSelection summonSelection;
@@ -236,6 +261,8 @@ namespace RotWorld
         // UI 종료 시 현재 지도 인구 변경 구독 해제
         private void OnDestroy()
         {
+            ReleaseTimeControls();
+
             // 지도 수명과 독립된 UI 콜백 정리
             if (summaryMap != null)
             {
@@ -386,6 +413,91 @@ namespace RotWorld
         }
 
 
+        // 하단 중앙의 실행 및 정지와 배속 아이콘 버튼 구성
+        private void BuildTimeControls(RectTransform bar)
+        {
+            // 지도 도구 왼쪽의 빈 영역에 다섯 버튼을 고정 간격으로 배치
+            float width = SimulationSpeeds.Length * TimeButtonWidth + (SimulationSpeeds.Length - 1) * TimeButtonGap;
+            var controls = Rect("Simulation Time Controls", bar, Vector2.one, Vector2.one,
+                new Vector2(-TimeControlsRightInset, -10f), new Vector2(width, TimeButtonHeight));
+
+            for (int i = 0; i < SimulationSpeeds.Length; i++)
+            {
+                int selection = i;
+                var size = new Vector2(TimeButtonWidth, TimeButtonHeight);
+                var button = MakeButton(controls, "", new Vector2(i * (TimeButtonWidth + TimeButtonGap), 0f),
+                    size, () => SelectSimulationSpeed(selection));
+                button.name = SimulationSpeedNames[i];
+                var outline = button.gameObject.AddComponent<Outline>();
+                outline.effectColor = SelectedTimeColor;
+                outline.effectDistance = new Vector2(2f, -2f);
+                timeSelectionOutlines[i] = outline;
+
+                // 삼각형과 정지 막대 및 세로형 번개의 개별 비율과 배속 숫자 유지
+                bool isFastForward = i >= 2;
+                var iconSize = i == 1 ? new Vector2(PauseIconWidth, PauseIconHeight) : new Vector2(TimeIconWidth, TimeIconHeight);
+
+                if (SimulationIconShapes[i] == SimulationTimeIcon.Shape.Lightning)
+                {
+                    iconSize = new Vector2(LightningIconWidth, LightningIconHeight);
+                }
+
+                var iconRect = Rect("Time Icon", button.transform, new Vector2(.5f, .5f), new Vector2(.5f, .5f),
+                    new Vector2(isFastForward ? -12f : 0f, 0f), iconSize);
+                var icon = iconRect.gameObject.AddComponent<SimulationTimeIcon>();
+                icon.Initialize(SimulationIconShapes[i]);
+                icon.raycastTarget = false;
+                timeIcons[i] = icon;
+
+                if (isFastForward)
+                {
+                    var label = Label(button.transform, SimulationSpeeds[i] + "x", new Vector2(32f, 0f),
+                        new Vector2(28f, TimeButtonHeight), TimeSpeedFontSize, true);
+                    label.alignment = TextAlignmentOptions.Center;
+                    timeSpeedLabels[i] = label;
+                }
+            }
+
+            // 최초 UI 구성 시 기본 실행 배속과 선택 표시 동기화
+            hasTimeControls = true;
+            SelectSimulationSpeed(0);
+        }
+
+
+        // 공통 시간 배율과 선택된 시간 버튼 표시 동기화
+        private void SelectSimulationSpeed(int selection)
+        {
+            // UI에서 선택한 배율을 이동과 전투 및 각종 연출에 공통 적용
+            Time.timeScale = SimulationSpeeds[selection];
+
+            // 1배속 실행 버튼 선택 시 사각형 표시 및 다른 상태에서 삼각형 복원
+            timeIcons[0].SetShape(selection == 0 ? SimulationTimeIcon.Shape.Stop : SimulationTimeIcon.Shape.Play);
+
+            for (int i = 0; i < SimulationSpeeds.Length; i++)
+            {
+                bool isSelected = i == selection;
+                timeSelectionOutlines[i].enabled = isSelected;
+                timeIcons[i].color = isSelected ? SelectedTimeColor : Color.white;
+
+                if (timeSpeedLabels[i] != null)
+                {
+                    timeSpeedLabels[i].color = isSelected ? SelectedTimeColor : Color.white;
+                }
+            }
+        }
+
+
+        // UI 파괴 시 공통 시간 복원
+        private void ReleaseTimeControls()
+        {
+            // Q키로 숨길 때 배율 유지 및 소유 UI 파괴 시에만 복원
+            if (hasTimeControls)
+            {
+                Time.timeScale = 1f;
+            }
+        }
+
+
         // 하단 도구 모음과 생성 설정창 구성
         private void BuildInterface()
         {
@@ -426,7 +538,8 @@ namespace RotWorld
             zombieOutline = MakeSummonButton(unitPanel, "좀비",
                 firstUnitPosition + new Vector2(SummonButtonSize + SummonButtonGap, 0), SummonSelection.Zombie);
 
-            summaryLabel = Label(bar, "새로운 도시를 만들어 주세요", new Vector2(22, -12), new Vector2(720, 40), 16);
+            summaryLabel = Label(bar, "새로운 도시를 만들어 주세요", new Vector2(22, -12), new Vector2(390, 40), 16);
+            BuildTimeControls(bar);
             var tools = Rect("Map Tools", bar, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-18, -10), new Vector2(438, 44));
             MakeButton(tools, "축소", Vector2.zero, new Vector2(62, 44), () => mapView.ChangeZoom(-1));
             MakeButton(tools, "확대", new Vector2(68, 0), new Vector2(62, 44), () => mapView.ChangeZoom(1));
@@ -540,6 +653,8 @@ namespace RotWorld
             {
                 var map = CityGenerator.Generate(settings);
                 mapView.Show(map);
+                // 새 도시의 시뮬레이션을 기본 실행 배속으로 시작
+                SelectSimulationSpeed(0);
                 // 지도 표시 성공 후 소환 패널 표시 허용
                 unitSummonPanel.SetActive(true);
                 RefreshSummary();

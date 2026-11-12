@@ -167,8 +167,8 @@ namespace RotWorld
         // 공격 준비 후 타격과 회복 및 피격 색상 복원
         private void Update()
         {
-            // 초기화 전 표시 처리 생략
-            if (movement == null)
+            // 초기화 전과 일시정지 중 전투 상태 및 표시 갱신 생략
+            if (movement == null || Time.deltaTime <= 0f)
             {
                 return;
             }
