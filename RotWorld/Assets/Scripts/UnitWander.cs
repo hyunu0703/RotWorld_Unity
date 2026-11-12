@@ -67,6 +67,13 @@ namespace RotWorld
         private float cooperativeNextAttackTime;
         private float cooperativeFirstSide = 1f;
 
+        // 세 명의 협동 중 위험 동료 구출과 안전 거리 복귀
+        private const float CooperativeRescueRetreatDuration = 3f;
+        private const float InjuredRescuerDistancePenalty = .5f;
+        private UnitWander cooperativeRescueTarget;
+        private UnitWander cooperativeRescuer;
+        private float cooperativeRetreatUntil;
+
         // 원형 도주의 장애물 사전 감지와 회피 방향 고정 및 안전 거리
         private const float OrbitObstacleMargin = .35f;
         private const float OrbitObstacleLookAhead = .9f;
@@ -634,9 +641,19 @@ namespace RotWorld
                 return true;
             }
 
-            // 추적 대상 교환 전의 피추적자와 같은 시점의 중복 공격 차단
-            if (!CanContinueCooperativeAttack() || cooperativeZombie.chaseTarget == populationIndex ||
-                !HasCooperativeStrikeTurn())
+            // 협동 종료 조건과 현재 피추적자의 지원 공격 차단
+            if (!CanContinueCooperativeAttack() || cooperativeZombie.chaseTarget == populationIndex)
+            {
+                return false;
+            }
+
+            // 구출자는 교대 시각과 측면 배치보다 위험 동료의 붙잡힘 해제 우선
+            if (leader.cooperativeRescueTarget != null)
+            {
+                return leader.cooperativeRescuer == this;
+            }
+
+            if (Time.time < cooperativeRetreatUntil || !HasCooperativeStrikeTurn())
             {
                 return false;
             }
@@ -646,6 +663,129 @@ namespace RotWorld
             // 좁은 지형에서는 측면 강제 대신 기존 근접 공격 허용
             return !IsTerrainClear(position, flank) || Vector2.Dot((position - cooperativeZombie.position).normalized,
                 (flank - cooperativeZombie.position).normalized) >= CooperativeFlankAlignment;
+        }
+
+
+        // 세 명의 참여자 중 붙잡히거나 부상 상태로 추적당하는 동료 조회
+        private UnitWander FindCooperativeRescueTarget()
+        {
+            // 붙잡힌 동료를 우선하고 부상자의 재피격 위험을 다음 순위로 확인
+            if (IsGrabbed)
+            {
+                return this;
+            }
+
+            if (cooperativeHelper.IsGrabbed)
+            {
+                return cooperativeHelper;
+            }
+
+            if (cooperativeSecondHelper.IsGrabbed)
+            {
+                return cooperativeSecondHelper;
+            }
+
+            if (hasBeenHit && cooperativeZombie.chaseTarget == populationIndex)
+            {
+                return this;
+            }
+
+            if (cooperativeHelper.hasBeenHit && cooperativeZombie.chaseTarget == cooperativeHelper.populationIndex)
+            {
+                return cooperativeHelper;
+            }
+
+            return cooperativeSecondHelper.hasBeenHit && cooperativeZombie.chaseTarget == cooperativeSecondHelper.populationIndex
+                ? cooperativeSecondHelper : null;
+        }
+
+
+        // 위험 동료를 구할 수 있는 지원자의 행동 가능 상태 조회
+        private bool CanRescueCooperativeHuman(UnitWander helper, UnitWander patient)
+        {
+            // 환자 자신과 붙잡힘 및 넉백 중인 지원자 제외
+            return helper != null && helper != patient && helper.IsHumanTarget && helper.isActiveAndEnabled && !helper.IsGrabbed &&
+                helper.knockbackElapsed >= KnockbackDuration;
+        }
+
+
+        // 공격 준비와 부상 위험을 고려한 접근 거리로 구출자 선택
+        private UnitWander FindCooperativeRescuer(UnitWander patient)
+        {
+            // 유인자를 제외한 두 지원자의 구출 가능 상태 확인
+            UnitWander first = CanRescueCooperativeHuman(cooperativeHelper, patient) ? cooperativeHelper : null;
+            UnitWander second = CanRescueCooperativeHuman(cooperativeSecondHelper, patient) ? cooperativeSecondHelper : null;
+
+            if (first == null || second == null)
+            {
+                return first != null ? first : second;
+            }
+
+            // 즉시 타격 가능한 지원자를 우선하고 부상 위험을 더한 접근 거리 비교
+            if (first.combat.IsHumanAttackReady != second.combat.IsHumanAttackReady)
+            {
+                return first.combat.IsHumanAttackReady ? first : second;
+            }
+
+            float firstDistance = Vector2.Distance(first.position, cooperativeZombie.position) + (first.hasBeenHit ? InjuredRescuerDistancePenalty : 0f);
+            float secondDistance = Vector2.Distance(second.position, cooperativeZombie.position) + (second.hasBeenHit ? InjuredRescuerDistancePenalty : 0f);
+            return firstDistance <= secondDistance ? first : second;
+        }
+
+
+        // 참여자의 위험 상태에 따라 협동 공격과 구출 우선 상태 갱신
+        private void RefreshCooperativeRescue()
+        {
+            // 두 명의 기존 협동에는 구출조 상태 미적용
+            UnitWander leader = cooperativeLeader != null ? cooperativeLeader : cooperativeHelper != null ? this : null;
+
+            if (leader == null || leader.cooperativeSecondHelper == null)
+            {
+                return;
+            }
+
+            UnitWander patient = leader.FindCooperativeRescueTarget();
+            UnitWander rescuer = null;
+
+            if (patient != null)
+            {
+                // 진행 중인 구출 공격의 소유자는 유지하고 행동 불가능 구출자만 교체
+                bool canKeepRescuer = patient == leader.cooperativeRescueTarget && leader.CanRescueCooperativeHuman(leader.cooperativeRescuer, patient);
+                rescuer = canKeepRescuer ? leader.cooperativeRescuer : leader.FindCooperativeRescuer(patient);
+
+                // 구출자의 쿨타임 대기 중 다른 지원자가 준비되면 즉시 구출 기회 이전
+                if (canKeepRescuer && !rescuer.combat.IsHumanAttackReady && !rescuer.combat.BlocksMovement && !rescuer.combat.CanMoveDuringAttack)
+                {
+                    UnitWander readyHelper = leader.FindCooperativeRescuer(patient);
+
+                    if (readyHelper != null && readyHelper.combat.IsHumanAttackReady)
+                    {
+                        rescuer = readyHelper;
+                    }
+                }
+            }
+
+            if (patient == leader.cooperativeRescueTarget && rescuer == leader.cooperativeRescuer)
+            {
+                return;
+            }
+
+            leader.cooperativeRescueTarget = patient;
+            leader.cooperativeRescuer = rescuer;
+
+            // 구출 중 다른 지원자의 준비 공격을 취소해 중복 진입과 재추적 방지
+            if (patient != null)
+            {
+                if (leader.cooperativeHelper != rescuer)
+                {
+                    leader.cooperativeHelper.combat.CancelAttack();
+                }
+
+                if (leader.cooperativeSecondHelper != rescuer)
+                {
+                    leader.cooperativeSecondHelper.combat.CancelAttack();
+                }
+            }
         }
 
 
@@ -686,6 +826,14 @@ namespace RotWorld
             }
 
             // 실제 타격자를 반격 대상으로 삼아 유인 부담을 세 인간에게 분산
+            UnitWander patient = cooperativeLeader.cooperativeRescueTarget;
+
+            if (patient != null)
+            {
+                // 구출된 인간의 재공격 진입을 잠시 막고 안전 거리 복귀 시간 확보
+                patient.cooperativeRetreatUntil = Time.time + CooperativeRescueRetreatDuration;
+            }
+
             target.chaseTarget = populationIndex;
             target.detectionRemaining = DetectionInterval;
             cooperativeLeader.TransferCooperativeLeadership(this);
@@ -776,10 +924,15 @@ namespace RotWorld
             {
                 leader.StopCooperativeAttack();
             }
-            else if (cooperativeLeader != null)
+            else if (leader != null)
             {
-                // 공격 회복과 붙잡힘 중에도 실제 이동을 관측해 재접근 시 과거 속도 사용 방지
-                UpdateCooperativeTargetMotion();
+                // 이동 차단 중에도 구출 상태 갱신 후 지원자의 이동 관측 유지
+                RefreshCooperativeRescue();
+
+                if (cooperativeLeader != null)
+                {
+                    UpdateCooperativeTargetMotion();
+                }
             }
         }
 
@@ -794,12 +947,16 @@ namespace RotWorld
             cooperativeHelper = null;
             cooperativeSecondHelper = null;
             cooperativeNextAttacker = null;
+            cooperativeRescueTarget = null;
+            cooperativeRescuer = null;
             nextLeader.cooperativeLeader = null;
             nextLeader.cooperativeHelper = first;
             nextLeader.cooperativeSecondHelper = second;
             nextLeader.cooperativeZombie = target;
             nextLeader.cooperativeNextAttacker = first;
             nextLeader.cooperativeNextAttackTime = Time.time + CooperativeStrikeSpacing;
+            nextLeader.cooperativeRescueTarget = null;
+            nextLeader.cooperativeRescuer = null;
             nextLeader.combat.CancelAttack();
             nextLeader.combat.SetCooperativeSupport(false);
             nextLeader.ResetCooperativeMovement();
@@ -837,6 +994,8 @@ namespace RotWorld
             cooperativeHelper = null;
             cooperativeSecondHelper = null;
             cooperativeNextAttacker = null;
+            cooperativeRescueTarget = null;
+            cooperativeRescuer = null;
             cooperativeZombie = null;
             combat.CancelAttack();
             ResetCooperativeMovement();
@@ -857,6 +1016,7 @@ namespace RotWorld
             helper.cooperativeLeader = null;
             helper.cooperativeZombie = null;
             helper.cooperativeZombieVelocity = Vector2.zero;
+            helper.cooperativeRetreatUntil = 0f;
             helper.combat.CancelAttack();
 
             // 지원 종료 시 재공격 간격 5초 복구 및 남은 쿨타임 제거
@@ -1155,6 +1315,7 @@ namespace RotWorld
             }
 
             grabOwner = owner;
+            RefreshCooperativeRescue();
             ReleaseReservations();
             map.ReleaseTile(currentTile);
             currentTile = Vector2Int.RoundToInt(position);
@@ -1205,6 +1366,8 @@ namespace RotWorld
             if (!isZombie)
             {
                 hasBeenHit = true;
+                cooperativeRetreatUntil = Time.time + CooperativeRescueRetreatDuration;
+                RefreshCooperativeRescue();
             }
 
             wanderExitTarget = null;
@@ -1805,13 +1968,15 @@ namespace RotWorld
                 // 세 명의 공격자는 넓게 대기하고 자기 공격 차례에만 근접 접근
                 if (cooperativeLeader != null && cooperativeLeader.cooperativeSecondHelper != null)
                 {
-                    bool isApproaching = combat.CanMoveDuringAttack ||
-                        (combat.IsHumanAttackReady && HasCooperativeStrikeTurn(CooperativeApproachLeadTime));
+                    UnitWander leader = cooperativeLeader;
+                    bool isRescuing = leader.cooperativeRescueTarget != null && leader.cooperativeRescuer == this;
+                    bool isApproaching = isRescuing || (leader.cooperativeRescueTarget == null && Time.time >= cooperativeRetreatUntil &&
+                        (combat.CanMoveDuringAttack || (combat.IsHumanAttackReady && HasCooperativeStrikeTurn(CooperativeApproachLeadTime))));
                     float flankDistance = isApproaching ? SeparationDistance : CooperativeStagingRadius;
                     Vector2 flank = CalculateCooperativeFlankPosition(flankDistance);
                     Vector2 interceptFlank = target + flank - cooperativeZombie.position;
 
-                    // 기존 가로채기 예측에 측면 간격을 더해 더 빠른 좀비의 뒤만 따르는 상황 방지
+                    // 구출자는 근접 측면 가로채기로 즉시 접근하고 다른 지원자는 넓은 측면 유지
                     if (IsTerrainClear(position, interceptFlank))
                     {
                         target = interceptFlank;
@@ -2092,6 +2257,8 @@ namespace RotWorld
                     leader.cooperativeHelper = leader.cooperativeHelper == this ? leader.cooperativeSecondHelper : leader.cooperativeHelper;
                     leader.cooperativeSecondHelper = null;
                     leader.cooperativeNextAttacker = null;
+                    leader.cooperativeRescueTarget = null;
+                    leader.cooperativeRescuer = null;
                     leader.DetachCooperativeHelper(this);
                     leader.ResetCooperativeMovement();
                 }
