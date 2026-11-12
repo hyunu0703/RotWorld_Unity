@@ -60,6 +60,8 @@ namespace RotWorld
         private const float CooperativeStrikeSpacing = 1.5f;
         private const float CooperativeTurnGrace = 1.5f;
         private const float CooperativeFlankAlignment = .25f;
+        private const float CooperativeStagingRadius = 3f;
+        private const float CooperativeApproachLeadTime = 1.25f;
         private UnitWander cooperativeSecondHelper;
         private UnitWander cooperativeNextAttacker;
         private float cooperativeNextAttackTime;
@@ -634,22 +636,27 @@ namespace RotWorld
 
             // 추적 대상 교환 전의 피추적자와 같은 시점의 중복 공격 차단
             if (!CanContinueCooperativeAttack() || cooperativeZombie.chaseTarget == populationIndex ||
-                Time.time < leader.cooperativeNextAttackTime)
+                !HasCooperativeStrikeTurn())
             {
                 return false;
             }
 
-            // 다른 공격자가 접근하지 못하면 제한 시간 뒤 현재 공격자에게 기회 양도
-            if (leader.cooperativeNextAttacker != this && Time.time < leader.cooperativeNextAttackTime + CooperativeTurnGrace)
-            {
-                return false;
-            }
-
-            Vector2 flank = CalculateCooperativeFlankPosition();
+            Vector2 flank = CalculateCooperativeFlankPosition(SeparationDistance);
 
             // 좁은 지형에서는 측면 강제 대신 기존 근접 공격 허용
             return !IsTerrainClear(position, flank) || Vector2.Dot((position - cooperativeZombie.position).normalized,
                 (flank - cooperativeZombie.position).normalized) >= CooperativeFlankAlignment;
+        }
+
+
+        // 현재 시각 또는 접근 준비 시각의 협동 공격 차례 조회
+        private bool HasCooperativeStrikeTurn(float anticipation = 0f)
+        {
+            // 공격 가능 시각 전의 이동 준비와 실제 공격 허용 시각 구분
+            UnitWander leader = cooperativeLeader;
+            float readyTime = Time.time + anticipation;
+            return readyTime >= leader.cooperativeNextAttackTime &&
+                (leader.cooperativeNextAttacker == this || readyTime >= leader.cooperativeNextAttackTime + CooperativeTurnGrace);
         }
 
 
@@ -685,10 +692,10 @@ namespace RotWorld
         }
 
 
-        // 유인자와 좀비를 잇는 축의 양옆 공격 지점 계산
-        private Vector2 CalculateCooperativeFlankPosition()
+        // 유인자와 좀비를 잇는 축의 양옆 대기 또는 공격 지점 계산
+        private Vector2 CalculateCooperativeFlankPosition(float distance)
         {
-            // 첫 지원자와 추가 지원자에게 반대 방향의 공격 사거리 배정
+            // 첫 지원자와 추가 지원자에게 반대 방향의 요청 거리 배정
             UnitWander leader = cooperativeLeader;
             Vector2 forward = (leader.position - cooperativeZombie.position).normalized;
 
@@ -698,7 +705,7 @@ namespace RotWorld
             }
 
             float side = leader.cooperativeHelper == this ? leader.cooperativeFirstSide : -leader.cooperativeFirstSide;
-            return cooperativeZombie.position + new Vector2(-forward.y, forward.x) * side * SeparationDistance;
+            return cooperativeZombie.position + new Vector2(-forward.y, forward.x) * side * distance;
         }
 
 
@@ -1795,10 +1802,13 @@ namespace RotWorld
             {
                 target = FindCooperativeInterceptPosition(baseSpeed);
 
-                // 세 명은 지정 측면으로 접근하고 좁은 지형에서는 기존 가로채기 유지
+                // 세 명의 공격자는 넓게 대기하고 자기 공격 차례에만 근접 접근
                 if (cooperativeLeader != null && cooperativeLeader.cooperativeSecondHelper != null)
                 {
-                    Vector2 flank = CalculateCooperativeFlankPosition();
+                    bool isApproaching = combat.CanMoveDuringAttack ||
+                        (combat.IsHumanAttackReady && HasCooperativeStrikeTurn(CooperativeApproachLeadTime));
+                    float flankDistance = isApproaching ? SeparationDistance : CooperativeStagingRadius;
+                    Vector2 flank = CalculateCooperativeFlankPosition(flankDistance);
                     Vector2 interceptFlank = target + flank - cooperativeZombie.position;
 
                     // 기존 가로채기 예측에 측면 간격을 더해 더 빠른 좀비의 뒤만 따르는 상황 방지
