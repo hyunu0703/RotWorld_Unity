@@ -45,7 +45,7 @@ namespace RotWorld
         private readonly List<Vector2> fleeThreats = new List<Vector2>();
         private bool needsFleePathUpdate;
 
-        // 단일 좀비에 대한 도주자와 지원자 연결 및 합동 공격 거리
+        // 단일 좀비에 대한 유인자와 첫 지원자 연결 및 합동 공격 거리
         private const float CooperativeRecruitRadius = 6f;
         private const float CooperativeDangerRadius = 5f;
         private const float CooperativeOrbitRadius = 4f;
@@ -55,6 +55,15 @@ namespace RotWorld
         private UnitWander cooperativeHelper;
         private UnitWander cooperativeLeader;
         private UnitWander cooperativeZombie;
+
+        // 세 인간의 양측 접근과 교대 공격 순서
+        private const float CooperativeStrikeSpacing = 1.5f;
+        private const float CooperativeTurnGrace = 1.5f;
+        private const float CooperativeFlankAlignment = .25f;
+        private UnitWander cooperativeSecondHelper;
+        private UnitWander cooperativeNextAttacker;
+        private float cooperativeNextAttackTime;
+        private float cooperativeFirstSide = 1f;
 
         // 원형 도주의 장애물 사전 감지와 회피 방향 고정 및 안전 거리
         private const float OrbitObstacleMargin = .35f;
@@ -257,15 +266,15 @@ namespace RotWorld
             }
 
             // 도주자의 공격 대기 중 원형 이동 점유를 정리하고 기존 도주 경로 재계산
-            if (cooperativeHelper != null && isDirectPursuit && !combat.IsHumanAttackReady)
+            if (cooperativeHelper != null && cooperativeSecondHelper == null && isDirectPursuit && !combat.IsHumanAttackReady)
             {
                 ResetCooperativeMovement();
             }
 
             UpdateReaction();
 
-            // 합동 공격 도주자는 공격 가능한 상태에서만 지원자 중심 원형 이동
-            if (cooperativeHelper != null && combat.IsHumanAttackReady)
+            // 두 명은 공격 가능 시 원형 이동 및 세 명의 유인자는 원형 이동 유지
+            if (cooperativeHelper != null && (combat.IsHumanAttackReady || cooperativeSecondHelper != null))
             {
                 UpdateCooperativeOrbit();
                 return;
@@ -391,7 +400,11 @@ namespace RotWorld
             }
 
             // 도주자는 일반 반격 및 지원자는 기존 지정 대상과 이동 공격 유지
-            combat.TryAttackZombie(position, cooperativeLeader != null ? cooperativeZombie : null);
+            // 세 명의 유인자는 공격보다 유인 이동 우선
+            if (cooperativeSecondHelper == null)
+            {
+                combat.TryAttackZombie(position, cooperativeLeader != null ? cooperativeZombie : null);
+            }
         }
 
 
@@ -418,11 +431,17 @@ namespace RotWorld
                 {
                     TryStartCooperativeAttack();
                 }
+
+                // 기존 두 명의 협동을 유지한 채 빈 지원자 자리 모집
+                if (!isZombie && cooperativeHelper != null && cooperativeSecondHelper == null)
+                {
+                    TryRecruitSecondHelper();
+                }
             }
 
-            // 지원자 추격과 공격 가능한 도주자의 원형 이동만 일반 타일 경로 교체 생략
+            // 지원자 추격과 두 명의 공격 가능 도주 및 세 명의 유인 이동은 일반 경로 교체 생략
             if ((isZombie && (isDirectPursuit || chaseTarget >= 0)) || cooperativeLeader != null ||
-                (cooperativeHelper != null && combat.IsHumanAttackReady))
+                (cooperativeHelper != null && (combat.IsHumanAttackReady || cooperativeSecondHelper != null)))
             {
                 return;
             }
@@ -510,29 +529,8 @@ namespace RotWorld
                 return;
             }
 
-            // 중복 배정과 다른 좀비의 추적을 제외한 6타일 이내 지원자 선택
-            UnitWander helper = null;
-            float bestDistance = CooperativeRecruitRadius * CooperativeRecruitRadius;
-
-            foreach (var human in map.HumanUnits.Values)
-            {
-                if (human == null || human == this || !human.IsHumanTarget || !human.isActiveAndEnabled ||
-                    human.cooperativeLeader != null || human.cooperativeHelper != null || human.IsGrabbed ||
-                    human.knockbackElapsed < KnockbackDuration)
-                {
-                    continue;
-                }
-
-                float distance = (human.position - position).sqrMagnitude;
-
-                if (distance > bestDistance || pursuer.chaseTarget == human.populationIndex || human.HasOtherZombieThreat(pursuer))
-                {
-                    continue;
-                }
-
-                helper = human;
-                bestDistance = distance;
-            }
+            // 첫 지원자와 추가 지원자에 동일한 모집 조건 적용
+            UnitWander helper = FindAvailableCooperativeHelper(pursuer);
 
             if (helper == null)
             {
@@ -558,6 +556,149 @@ namespace RotWorld
 
             // 지원자만 재공격 간격 3초 전환 및 기존 쿨타임 제거
             helper.combat.SetCooperativeSupport(true);
+        }
+
+
+        // 중복 배정과 추가 위협이 없는 가장 가까운 지원자 조회
+        private UnitWander FindAvailableCooperativeHelper(UnitWander target)
+        {
+            // 도주자의 6타일 이내에서 기존 협동 참여자와 행동 불가능 인간 제외
+            UnitWander helper = null;
+            float bestDistance = CooperativeRecruitRadius * CooperativeRecruitRadius;
+
+            foreach (var human in map.HumanUnits.Values)
+            {
+                if (human == null || human == this || !human.IsHumanTarget || !human.isActiveAndEnabled ||
+                    human.cooperativeLeader != null || human.cooperativeHelper != null || human.IsGrabbed ||
+                    human.knockbackElapsed < KnockbackDuration)
+                {
+                    continue;
+                }
+
+                float distance = (human.position - position).sqrMagnitude;
+
+                if (distance > bestDistance || target.chaseTarget == human.populationIndex || human.HasOtherZombieThreat(target))
+                {
+                    continue;
+                }
+
+                helper = human;
+                bestDistance = distance;
+            }
+
+            return helper;
+        }
+
+
+        // 기존 두 인간의 협동에 두 번째 공격자 연결
+        private void TryRecruitSecondHelper()
+        {
+            // 유효한 두 명의 협동에서만 세 번째 인간 모집
+            if (cooperativeSecondHelper != null || !CanContinueCooperativeAttack())
+            {
+                return;
+            }
+
+            UnitWander helper = FindAvailableCooperativeHelper(cooperativeZombie);
+
+            if (helper == null)
+            {
+                return;
+            }
+
+            // 기존 지원자 쪽을 유지하고 새 지원자에게 반대편 배정
+            cooperativeSecondHelper = helper;
+            ConfigureCooperativeHelper(helper);
+            Vector2 forward = (position - cooperativeZombie.position).normalized;
+            Vector2 side = new Vector2(-forward.y, forward.x);
+            cooperativeFirstSide = Vector2.Dot(cooperativeHelper.position - cooperativeZombie.position, side) >= 0f ? 1f : -1f;
+            cooperativeNextAttacker = cooperativeHelper;
+            cooperativeNextAttackTime = Time.time + CooperativeStrikeSpacing;
+            combat.CancelAttack();
+
+            // 두 공격자의 중간을 기준으로 새 원형 유인 각도 계산
+            ResetCooperativeMovement();
+        }
+
+
+        // 세 명의 협동에서 지정 공격 순서와 측면 접근 조건 조회
+        internal bool CanStartCooperativeStrike()
+        {
+            // 두 명의 협동은 기존 공격 시점 유지
+            UnitWander leader = cooperativeLeader;
+
+            if (leader == null || leader.cooperativeSecondHelper == null)
+            {
+                return true;
+            }
+
+            // 추적 대상 교환 전의 피추적자와 같은 시점의 중복 공격 차단
+            if (!CanContinueCooperativeAttack() || cooperativeZombie.chaseTarget == populationIndex ||
+                Time.time < leader.cooperativeNextAttackTime)
+            {
+                return false;
+            }
+
+            // 다른 공격자가 접근하지 못하면 제한 시간 뒤 현재 공격자에게 기회 양도
+            if (leader.cooperativeNextAttacker != this && Time.time < leader.cooperativeNextAttackTime + CooperativeTurnGrace)
+            {
+                return false;
+            }
+
+            Vector2 flank = CalculateCooperativeFlankPosition();
+
+            // 좁은 지형에서는 측면 강제 대신 기존 근접 공격 허용
+            return !IsTerrainClear(position, flank) || Vector2.Dot((position - cooperativeZombie.position).normalized,
+                (flank - cooperativeZombie.position).normalized) >= CooperativeFlankAlignment;
+        }
+
+
+        // 공격 시작을 다음 공격자의 차례와 최소 간격에 반영
+        internal void NotifyCooperativeStrikeStarted()
+        {
+            // 두 명의 협동에는 교대 제약 미적용
+            if (cooperativeLeader == null || cooperativeLeader.cooperativeSecondHelper == null)
+            {
+                return;
+            }
+
+            UnitWander leader = cooperativeLeader;
+            leader.cooperativeNextAttacker = leader.cooperativeHelper == this ? leader.cooperativeSecondHelper : leader.cooperativeHelper;
+            leader.cooperativeNextAttackTime = Time.time + CooperativeStrikeSpacing;
+        }
+
+
+        // 세 명의 협동 타격에 대한 좀비의 반격 대상과 새 유인자 지정
+        internal void NotifyCooperativeStrikeHit(UnitWander target)
+        {
+            // 두 명의 기존 전략과 처치된 좀비의 종료 흐름 보존
+            if (cooperativeLeader == null || cooperativeLeader.cooperativeSecondHelper == null || target == null ||
+                !target.IsZombieTarget || target != cooperativeZombie)
+            {
+                return;
+            }
+
+            // 실제 타격자를 반격 대상으로 삼아 유인 부담을 세 인간에게 분산
+            target.chaseTarget = populationIndex;
+            target.detectionRemaining = DetectionInterval;
+            cooperativeLeader.TransferCooperativeLeadership(this);
+        }
+
+
+        // 유인자와 좀비를 잇는 축의 양옆 공격 지점 계산
+        private Vector2 CalculateCooperativeFlankPosition()
+        {
+            // 첫 지원자와 추가 지원자에게 반대 방향의 공격 사거리 배정
+            UnitWander leader = cooperativeLeader;
+            Vector2 forward = (leader.position - cooperativeZombie.position).normalized;
+
+            if (forward.sqrMagnitude == 0f)
+            {
+                forward = Vector2.up;
+            }
+
+            float side = leader.cooperativeHelper == this ? leader.cooperativeFirstSide : -leader.cooperativeFirstSide;
+            return cooperativeZombie.position + new Vector2(-forward.y, forward.x) * side * SeparationDistance;
         }
 
 
@@ -595,10 +736,16 @@ namespace RotWorld
             }
 
             UnitWander helper = leader.cooperativeHelper;
+            UnitWander secondHelper = leader.cooperativeSecondHelper;
             UnitWander target = leader.cooperativeZombie;
+
+            // 세 명은 어느 참여자가 추적당해도 협동 유지 후 유인자 역할 교환
             return leader.IsHumanTarget && leader.isActiveAndEnabled && helper != null && helper.IsHumanTarget &&
                 helper.isActiveAndEnabled && target != null && target.IsZombieTarget && target.isActiveAndEnabled &&
-                target.chaseTarget == leader.populationIndex && !leader.HasOtherZombieThreat(target) && !helper.HasOtherZombieThreat(target);
+                (target.chaseTarget == leader.populationIndex || (secondHelper != null &&
+                    (target.chaseTarget == helper.populationIndex || target.chaseTarget == secondHelper.populationIndex))) &&
+                !leader.HasOtherZombieThreat(target) && !helper.HasOtherZombieThreat(target) &&
+                (secondHelper == null || (secondHelper.IsHumanTarget && secondHelper.isActiveAndEnabled && !secondHelper.HasOtherZombieThreat(target)));
         }
 
 
@@ -607,6 +754,16 @@ namespace RotWorld
         {
             // 양방향 연결의 소유 도주자를 통해 동일한 종료 처리 적용
             UnitWander leader = cooperativeLeader != null ? cooperativeLeader : cooperativeHelper != null ? this : null;
+
+            // 세 명의 협동에서 좀비가 다른 참여자를 추적하면 새 유인자로 전환
+            if (leader != null && leader.cooperativeSecondHelper != null && CanContinueCooperativeAttack() &&
+                leader.cooperativeZombie.chaseTarget != leader.populationIndex)
+            {
+                UnitWander nextLeader = leader.cooperativeZombie.chaseTarget == leader.cooperativeHelper.populationIndex
+                    ? leader.cooperativeHelper : leader.cooperativeSecondHelper;
+                leader.TransferCooperativeLeadership(nextLeader);
+                leader = nextLeader;
+            }
 
             if (leader != null && !CanContinueCooperativeAttack())
             {
@@ -620,15 +777,71 @@ namespace RotWorld
         }
 
 
+        // 추적 대상이 된 공격자에게 세 명의 유인자 역할 이전
+        private void TransferCooperativeLeadership(UnitWander nextLeader)
+        {
+            // 기존 유인자를 새 공격자로 배치하고 다른 공격자의 자리 유지
+            UnitWander first = cooperativeHelper == nextLeader ? this : cooperativeHelper;
+            UnitWander second = cooperativeSecondHelper == nextLeader ? this : cooperativeSecondHelper;
+            UnitWander target = cooperativeZombie;
+            cooperativeHelper = null;
+            cooperativeSecondHelper = null;
+            cooperativeNextAttacker = null;
+            nextLeader.cooperativeLeader = null;
+            nextLeader.cooperativeHelper = first;
+            nextLeader.cooperativeSecondHelper = second;
+            nextLeader.cooperativeZombie = target;
+            nextLeader.cooperativeNextAttacker = first;
+            nextLeader.cooperativeNextAttackTime = Time.time + CooperativeStrikeSpacing;
+            nextLeader.combat.CancelAttack();
+            nextLeader.combat.SetCooperativeSupport(false);
+            nextLeader.ResetCooperativeMovement();
+
+            // 새 유인자 기준의 공격 연결과 관측 속도 초기화
+            nextLeader.ConfigureCooperativeHelper(first);
+            nextLeader.ConfigureCooperativeHelper(second);
+            Vector2 forward = (nextLeader.position - target.position).normalized;
+            Vector2 side = new Vector2(-forward.y, forward.x);
+            nextLeader.cooperativeFirstSide = Vector2.Dot(first.position - target.position, side) >= 0f ? 1f : -1f;
+        }
+
+
+        // 역할 교환 후 지원자의 연결과 이동 및 공격 상태 갱신
+        private void ConfigureCooperativeHelper(UnitWander helper)
+        {
+            // 새 유인자와 지정 좀비를 전달하고 이전 공격 및 예측 속도 폐기
+            helper.cooperativeLeader = this;
+            helper.cooperativeZombie = cooperativeZombie;
+            helper.cooperativePreviousZombiePosition = cooperativeZombie.position;
+            helper.cooperativeZombieVelocity = Vector2.zero;
+            helper.cooperativeMotionSampleTime = Time.time;
+            helper.combat.CancelAttack();
+            helper.combat.SetCooperativeSupport(true);
+            helper.ResetCooperativeMovement();
+        }
+
+
         // 양방향 합동 공격 연결 해제 후 지원자의 기존 감지와 도주 복구
         private void StopCooperativeAttack()
         {
-            // 도주자와 지원자 참조를 함께 정리해 재배정 허용
+            // 유인자와 두 지원자의 참조를 함께 정리해 재배정 허용
             UnitWander helper = cooperativeHelper;
+            UnitWander secondHelper = cooperativeSecondHelper;
             cooperativeHelper = null;
+            cooperativeSecondHelper = null;
+            cooperativeNextAttacker = null;
             cooperativeZombie = null;
+            combat.CancelAttack();
             ResetCooperativeMovement();
+            DetachCooperativeHelper(helper);
+            DetachCooperativeHelper(secondHelper);
+        }
 
+
+        // 협동에서 빠진 지원자의 일반 공격 간격과 감지 이동 복구
+        private void DetachCooperativeHelper(UnitWander helper)
+        {
+            // 빈 두 번째 자리나 이미 제거된 참여자 제외
             if (helper == null)
             {
                 return;
@@ -661,12 +874,17 @@ namespace RotWorld
             hasChasePath = false;
             detectionRemaining = 0f;
             restRemaining = 0f;
+            wanderExitTarget = null;
         }
 
 
-        // 이동 중인 지원자 중심의 반경 4타일 원형 도주
+        // 한 지원자 또는 두 공격자의 중간점 중심으로 반경 4타일 원형 도주
         private void UpdateCooperativeOrbit()
         {
+            // 두 명은 기존 지원자 중심 유지 및 세 명은 두 공격자의 중간점 사용
+            Vector2 center = cooperativeSecondHelper == null ? cooperativeHelper.position
+                : (cooperativeHelper.position + cooperativeSecondHelper.position) * .5f;
+
             // 기존 타일 경로 예약을 반환하고 실제 좌표 기반 이동으로 전환
             if (!isDirectPursuit)
             {
@@ -680,11 +898,10 @@ namespace RotWorld
                 hasChasePath = false;
 
                 // 쿨타임 중 일반 도주로 달라진 위치에서 원형 회전 각도 재설정
-                Vector2 radial = position - cooperativeHelper.position;
+                Vector2 radial = position - center;
                 cooperativeOrbitAngle = Mathf.Atan2(radial.y, radial.x);
             }
 
-            Vector2 center = cooperativeHelper.position;
             float speed = humanSpeed * (hasBeenHit ? InjuredSpeedMultiplier : 1f) * speedVariation * UnitPathfinder.SpeedMultiplier(map, currentTile);
             float remaining = speed * Time.deltaTime;
             float travelled = 0f;
@@ -1138,14 +1355,25 @@ namespace RotWorld
 
             if (wasCooperating)
             {
-                // 연결 해제로 상대 역할 정보가 사라지기 전에 두 인간의 배회 복귀 처리
-                UnitWander partner = cooperativeLeader != null ? cooperativeLeader : cooperativeHelper;
-                ReleaseCooperativeAttack();
+                // 연결 해제 전에 세 참여자를 보관해 마지막 타격자의 실행 순서와 무관하게 복귀
+                UnitWander leader = cooperativeLeader != null ? cooperativeLeader : this;
+                UnitWander helper = leader.cooperativeHelper;
+                UnitWander secondHelper = leader.cooperativeSecondHelper;
+                leader.StopCooperativeAttack();
 
-                if (partner != null && partner.IsHumanTarget)
+                if (leader != this && leader.IsHumanTarget)
                 {
-                    partner.combat.CancelZombieTarget(zombie);
-                    partner.ResumeAfterZombieDefeat(zombie);
+                    leader.ResumeAfterZombieDefeat(zombie);
+                }
+
+                if (helper != null && helper != this && helper.IsHumanTarget)
+                {
+                    helper.ResumeAfterZombieDefeat(zombie);
+                }
+
+                if (secondHelper != null && secondHelper != this && secondHelper.IsHumanTarget)
+                {
+                    secondHelper.ResumeAfterZombieDefeat(zombie);
                 }
             }
 
@@ -1566,6 +1794,19 @@ namespace RotWorld
             if (!isZombie && hasTarget)
             {
                 target = FindCooperativeInterceptPosition(baseSpeed);
+
+                // 세 명은 지정 측면으로 접근하고 좁은 지형에서는 기존 가로채기 유지
+                if (cooperativeLeader != null && cooperativeLeader.cooperativeSecondHelper != null)
+                {
+                    Vector2 flank = CalculateCooperativeFlankPosition();
+                    Vector2 interceptFlank = target + flank - cooperativeZombie.position;
+
+                    // 기존 가로채기 예측에 측면 간격을 더해 더 빠른 좀비의 뒤만 따르는 상황 방지
+                    if (IsTerrainClear(position, interceptFlank))
+                    {
+                        target = interceptFlank;
+                    }
+                }
             }
 
             // 직선이 물이나 건물에 막힐 때만 경로 탐색으로 보행 가능한 중간 지점 선택
@@ -1833,7 +2074,21 @@ namespace RotWorld
             // 지원자도 도주자 소유 연결을 통해 함께 정리
             if (cooperativeLeader != null)
             {
-                cooperativeLeader.StopCooperativeAttack();
+                UnitWander leader = cooperativeLeader;
+
+                // 세 명 중 지원자 이탈 시 남은 지원자로 기존 두 명의 협동 유지
+                if (leader.cooperativeSecondHelper != null)
+                {
+                    leader.cooperativeHelper = leader.cooperativeHelper == this ? leader.cooperativeSecondHelper : leader.cooperativeHelper;
+                    leader.cooperativeSecondHelper = null;
+                    leader.cooperativeNextAttacker = null;
+                    leader.DetachCooperativeHelper(this);
+                    leader.ResetCooperativeMovement();
+                }
+                else
+                {
+                    leader.StopCooperativeAttack();
+                }
             }
             else if (cooperativeHelper != null)
             {

@@ -84,6 +84,12 @@ namespace RotWorld
                 return false;
             }
 
+            // 세 인간의 지원 공격은 이동 컴포넌트의 교대 순서와 측면 접근 조건 적용
+            if (requiredTarget != null && !movement.CanStartCooperativeStrike())
+            {
+                return false;
+            }
+
             // 쓰러진 좀비를 제외하고 건물에 가려지지 않은 최단 거리 대상 선택
             UnitWander target = null;
             float bestDistance = HumanAttackRange + DistanceTolerance;
@@ -112,6 +118,12 @@ namespace RotWorld
             }
 
             BeginAttack(target, position, CurrentHumanAttackInterval, requiredTarget != null);
+
+            if (requiredTarget != null)
+            {
+                movement.NotifyCooperativeStrikeStarted();
+            }
+
             return true;
         }
 
@@ -205,7 +217,14 @@ namespace RotWorld
                 if (victim != null && Vector2.Distance(movement.Position, victim.Position) <= AttackRange + DistanceTolerance &&
                     UnitSight.HasLineOfSight(map, movement.Position, victim.Position))
                 {
-                    victim.ReceiveHit(attackDirection);
+                    UnitWander hitTarget = victim;
+                    hitTarget.ReceiveHit(attackDirection);
+
+                    // 세 명의 협동 타격 후 반격 대상 변경과 유인자 역할 교환
+                    if (!isZombie && isCooperativeAttack)
+                    {
+                        movement.NotifyCooperativeStrikeHit(hitTarget);
+                    }
 
                     // 타격 콜백에서 공격이 취소되면 회복 대기를 다시 설정하지 않도록 즉시 종료
                     if (!isAttacking)
