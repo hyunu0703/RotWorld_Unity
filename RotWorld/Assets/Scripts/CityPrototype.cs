@@ -49,6 +49,17 @@ namespace RotWorld
         private GameObject bottomToolbar;
         private GameObject unitSummonPanel;
 
+        // 지도 생성 후 표시할 일차와 24시간 형식 시계
+        private const float DateBarHeight = 52f;
+        private const float DateLabelInset = 22f;
+        private const float DateLabelWidth = 240f;
+        private const float DateLabelFontSize = 24f;
+        private readonly GameClock gameClock = new GameClock();
+        private GameObject dateBar;
+        private TMP_Text dayLabel;
+        private TMP_Text clockLabel;
+        private long displayedGameSeconds = -1;
+
         // 하단 시간 제어의 배속 선택과 벡터 아이콘 보관
         private static readonly float[] SimulationSpeeds = { 1f, 0f, 2f, 4f, 8f };
         private static readonly string[] SimulationSpeedNames = { "실행", "일시정지", "2배속", "4배속", "8배속" };
@@ -131,9 +142,16 @@ namespace RotWorld
         }
 
 
-        // Q키 입력에 따른 하단 도구 모음과 소환 패널 표시 전환
+        // 게임 시계 진행과 Q키 입력에 따른 하단 도구 모음 표시 전환
         private void Update()
         {
+            // 지도 생성 이후 공통 배속이 적용된 시간을 시계와 상단 표시에 전달
+            if (mapView != null && mapView.Map != null)
+            {
+                gameClock.Advance(Time.deltaTime);
+                RefreshClockDisplay();
+            }
+
             // UI 구성 전 또는 키보드 부재 시 입력 처리 생략
             var keyboard = Keyboard.current;
 
@@ -413,6 +431,45 @@ namespace RotWorld
         }
 
 
+        // 화면 상단 양쪽에 일차와 현재 시각 표시 영역 구성
+        private void BuildDateBar(RectTransform canvasRect)
+        {
+            // 화면 너비에 맞춘 상단 배경과 맵 생성 전 숨김 처리
+            var bar = Rect("Date Bar", canvasRect, Vector2.up, Vector2.up, Vector2.zero,
+                new Vector2(0f, DateBarHeight));
+            bar.anchorMax = Vector2.one;
+            Background(bar, PanelColor);
+            dateBar = bar.gameObject;
+
+            // 왼쪽 일차와 오른쪽 시각에 각각 한국어 및 숫자 폰트 적용
+            dayLabel = Label(bar, "", new Vector2(DateLabelInset, 0f),
+                new Vector2(DateLabelWidth, DateBarHeight), DateLabelFontSize);
+            clockLabel = Label(bar, "", new Vector2(-DateLabelInset, 0f),
+                new Vector2(DateLabelWidth, DateBarHeight), DateLabelFontSize, true);
+            clockLabel.rectTransform.anchorMin = Vector2.one;
+            clockLabel.rectTransform.anchorMax = Vector2.one;
+            clockLabel.rectTransform.pivot = Vector2.one;
+            clockLabel.alignment = TextAlignmentOptions.MidlineRight;
+            dateBar.SetActive(false);
+        }
+
+
+        // 게임 시각이 바뀐 경우에만 상단 일차와 시각 갱신
+        private void RefreshClockDisplay()
+        {
+            // 정지 및 같은 게임 초 동안 중복 문자열 생성 방지
+            if (displayedGameSeconds == gameClock.ElapsedSeconds)
+            {
+                return;
+            }
+
+            // 자정에 증가한 일차와 하루 안의 시각을 UI에 함께 전달
+            displayedGameSeconds = gameClock.ElapsedSeconds;
+            dayLabel.text = $"{gameClock.CurrentDay}일차";
+            clockLabel.text = $"{gameClock.Hour:00}:{gameClock.Minute:00}:{gameClock.Second:00}";
+        }
+
+
         // 하단 중앙의 실행 및 정지와 배속 아이콘 버튼 구성
         private void BuildTimeControls(RectTransform bar)
         {
@@ -519,6 +576,7 @@ namespace RotWorld
 
             interfaceRect = canvasRect;
             summonPointer = new PointerEventData(EventSystem.current);
+            BuildDateBar(canvasRect);
 
             // 지도 도구 모음과 요약 표시 영역 구성
             var bar = Rect("Bottom Toolbar", canvasRect, new Vector2(0, 0), Vector2.zero, Vector2.zero, new Vector2(0, BottomToolbarHeight));
@@ -653,6 +711,12 @@ namespace RotWorld
             {
                 var map = CityGenerator.Generate(settings);
                 mapView.Show(map);
+                // 지도 교체 성공 후 첫날 자정부터 새 시계 표시 시작
+                gameClock.Reset();
+                displayedGameSeconds = -1;
+                RefreshClockDisplay();
+                dateBar.SetActive(true);
+
                 // 새 도시의 시뮬레이션을 기본 실행 배속으로 시작
                 SelectSimulationSpeed(0);
                 // 지도 표시 성공 후 소환 패널 표시 허용
