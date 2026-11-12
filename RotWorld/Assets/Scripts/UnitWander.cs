@@ -1015,18 +1015,21 @@ namespace RotWorld
             // 쓰러진 참여자의 합동 공격 연결 즉시 해제
             ReleaseCooperativeAttack();
 
-            // 개체 점유는 유지하고 진행 중 이동 예약만 반환
+            // 쓰러진 인간의 이동 예약과 타일 점유 및 실제 충돌 좌표 반환
             isDowned = true;
             downedElapsed = 0f;
             grabOwner = null;
             knockbackElapsed = KnockbackDuration;
             knockbackFinishedFrame = Time.frameCount;
             ReleaseReservations();
+            map.ReleaseTile(currentTile);
+            map.HumanPositions.Remove(populationIndex);
             path.Clear();
             pathIndex = 0;
             hasChasePath = false;
             map.InactiveHumans.Add(populationIndex);
             map.HumanSpeeds[populationIndex] = 0f;
+            walkAnimation.SetDownedSortingOrder();
             walkAnimation.SetKnockbackHeight(0f);
             walkAnimation.Stop();
             walkAnimation.SetConversionProgress(conversionFrames, 0f);
@@ -1045,12 +1048,14 @@ namespace RotWorld
         // 다섯 번째 피격 후 좀비의 추적과 공격 중단 및 쓰러짐 시작
         private void FallDownZombie()
         {
-            // 시체 위치 점유는 유지해 다른 개체와 겹침을 막고 이동 예약만 반환
+            // 쓰러진 좀비의 이동 예약과 타일 점유 및 실제 충돌 좌표 반환
             isDowned = true;
             downedElapsed = 0f;
             knockbackElapsed = KnockbackDuration;
             knockbackFinishedFrame = Time.frameCount;
             ReleaseReservations();
+            map.ReleaseTile(currentTile);
+            map.ZombiePositions.Remove(populationIndex);
             path.Clear();
             pathIndex = 0;
             hasChasePath = false;
@@ -1073,6 +1078,7 @@ namespace RotWorld
             map.NotifyPopulationChanged();
 
             // 피격 색상 후 흰색 전환 시작 프레임 적용
+            walkAnimation.SetDownedSortingOrder();
             walkAnimation.SetKnockbackHeight(0f);
             walkAnimation.Stop();
             walkAnimation.SetDeathProgress(deathVisuals == null ? null : deathVisuals.FadeFrames, 0f);
@@ -1083,7 +1089,7 @@ namespace RotWorld
         // 흰색 전환을 마친 좀비를 먼지 연출로 교체 후 제거
         private void Disintegrate()
         {
-            // 먼지 연출을 독립 개체로 남기고 점유 해제는 OnDestroy에서 처리
+            // 충돌 해제를 마친 시체를 독립 먼지 연출로 교체
             walkAnimation.Disintegrate(deathVisuals);
             enabled = false;
             Destroy(gameObject);
@@ -1174,7 +1180,7 @@ namespace RotWorld
         // 쓰러진 상대 가까이에서 충돌 없이 빠져나갈 배회 시작 구간 선택
         private void BeginWanderExit(Vector2 fallenPosition)
         {
-            // 일반 타일 경로가 근접 시체에 막히는 구간은 실제 좌표에서 이탈
+            // 근접 시체를 벗어나 일반 배회를 시작할 수 있는 빈 타일까지 이탈
             const int SearchRadius = 2;
             Vector2 away = position - fallenPosition;
             float bestScore = float.PositiveInfinity;
@@ -1187,8 +1193,10 @@ namespace RotWorld
                     Vector2 candidate = currentTile + new Vector2Int(x, y);
                     Vector2 delta = candidate - position;
 
-                    if (delta.sqrMagnitude <= .0001f || Vector2.Dot(delta, away) <= 0f ||
-                        !IsTerrainClear(position, candidate) || !HasUnitClearance(candidate))
+                    // 현재 타일 중심으로의 짧은 복귀와 다른 개체가 점유한 도착점 제외
+                    if (delta.sqrMagnitude < SeparationDistance * SeparationDistance || Vector2.Dot(delta, away) <= 0f ||
+                        map.OccupiedTiles.Contains(Vector2Int.RoundToInt(candidate)) ||
+                        !IsTerrainClear(position, candidate) || !HasWanderExitClearance(candidate))
                     {
                         continue;
                     }
@@ -1202,6 +1210,24 @@ namespace RotWorld
                     }
                 }
             }
+        }
+
+
+        // 시체 이탈 구간 전체의 실제 유닛 간격 검사
+        private bool HasWanderExitClearance(Vector2 destination)
+        {
+            // 도착점만 통과하고 중간에서 살아 있는 유닛에 막히는 경로 제외
+            int samples = Mathf.Max(1, Mathf.CeilToInt(Vector2.Distance(position, destination) / MaximumSubstep));
+
+            for (int i = 1; i <= samples; i++)
+            {
+                if (!HasUnitClearance(Vector2.Lerp(position, destination, i / (float)samples)))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
 
@@ -1296,7 +1322,8 @@ namespace RotWorld
             map.HumanPositions.Remove(oldIndex);
             map.HumanSpeeds.Remove(oldIndex);
             map.HumanDestinations.Remove(oldIndex);
-            map.ReleaseTile(currentTile);
+
+            // 쓰러질 때 반환한 점유를 재해제하지 않고 변환 위치에서 새 점유 확보
             position = destination.Value;
             currentTile = Vector2Int.RoundToInt(position);
             map.OccupyTile(currentTile);
@@ -1321,10 +1348,10 @@ namespace RotWorld
         }
 
 
-        // 변환 위치에서 모든 실제 개체와 최소 간격 검사
+        // 변환 위치에서 살아 있는 개체와 최소 간격 검사
         private bool HasConversionClearance(Vector2 candidate)
         {
-            // 자신의 인간 기록만 제외하고 쓰러진 다른 인간도 충돌 대상으로 유지
+            // 쓰러질 때 제거된 충돌 좌표를 제외한 활동 개체의 간격 확인
             foreach (var human in map.HumanPositions)
             {
                 if (human.Key != populationIndex && Vector2.Distance(candidate, human.Value) < SeparationDistance)
@@ -1699,7 +1726,7 @@ namespace RotWorld
         }
 
 
-        // 공격 거리와 동일한 최소 간격으로 모든 유닛의 겹침 차단
+        // 공격 거리와 동일한 최소 간격으로 살아 있는 유닛의 겹침 차단
         private bool HasUnitClearance(Vector2 next)
         {
             // 이미 근접한 상대와는 멀어지는 이동과 넉백을 허용
@@ -1830,7 +1857,13 @@ namespace RotWorld
             if (map != null)
             {
                 ReleaseReservations();
-                map.ReleaseTile(currentTile);
+
+                // 시체는 쓰러질 때 점유를 반환하므로 다른 개체의 점유 해제 방지
+                if (!isDowned)
+                {
+                    map.ReleaseTile(currentTile);
+                }
+
                 (isZombie ? map.ZombiePositions : map.HumanPositions).Remove(populationIndex);
                 (isZombie ? map.ZombieUnits : map.HumanUnits).Remove(populationIndex);
 

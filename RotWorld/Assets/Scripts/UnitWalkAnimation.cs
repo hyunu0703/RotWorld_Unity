@@ -22,7 +22,9 @@ namespace RotWorld
         private SpriteRenderer visual;
         private int humanSortingOrder;
         private bool isZombieVisual;
+        internal const int LivingSortingOffset = 2;
         private const int ZombieSortingOffset = 1;
+        private const int CorpseSortingOffset = -1;
         private Sprite[] frames;
         private Sprite[] summonFrames;
         private bool isSummonWhite;
@@ -98,11 +100,19 @@ namespace RotWorld
         // 유형별 표시 우선순위와 개체 색상 초기화
         public void SetUnitType(bool zombie)
         {
-            // 좀비는 모든 인간 피격 및 변환 표시보다 앞에 렌더링
+            // 살아 있는 좀비는 인간보다 앞에 렌더링하고 변환 시 시체 표시 순서 복원
             isZombieVisual = zombie;
             visual.sortingOrder = humanSortingOrder + (zombie ? ZombieSortingOffset : 0);
             isHitVisible = false;
             visual.color = Color.white;
+        }
+
+
+        // 시체를 살아 있는 인간과 좀비보다 뒤에 표시
+        internal void SetDownedSortingOrder()
+        {
+            // 지도 위에 확보된 시체 표시 순서로 전환
+            visual.sortingOrder = humanSortingOrder + CorpseSortingOffset;
         }
 
 

@@ -485,7 +485,7 @@ namespace RotWorld
             visual.transform.SetParent(unit.transform, false);
             var renderer = visual.AddComponent<SpriteRenderer>();
             renderer.sprite = GetUnitIcon(zombie);
-            renderer.sortingOrder = spriteRenderer.sortingOrder + 1;
+            renderer.sortingOrder = spriteRenderer.sortingOrder + UnitWalkAnimation.LivingSortingOffset;
             var animationView = unit.AddComponent<UnitWalkAnimation>();
             animationView.Initialize(renderer, GetUnitWalkFrames(zombie));
 
