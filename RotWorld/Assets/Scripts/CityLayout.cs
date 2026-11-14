@@ -96,7 +96,7 @@ namespace RotWorld
             PopulateBuildings();
             ConnectBuildings();
             PopulateNaturalBuildings();
-            AssignBuildingTypes();
+            BuildingCatalog.AssignTypes(mapData);
         }
 
 
@@ -1161,23 +1161,6 @@ namespace RotWorld
                         break;
                     }
                 }
-            }
-        }
-
-
-        // 최종 출입구 확정 후 구역별 건물 종류 부여
-        private void AssignBuildingTypes()
-        {
-            // 기존 외형과 재고를 보존하며 독립된 종류 데이터 생성
-            var counts = new int[mapData.RegionTargets.Length];
-
-            for (int i = 0; i < mapData.Buildings.Count; i++)
-            {
-                var building = mapData.Buildings[i];
-                var center = building.Bounds.center;
-                var region = mapData.Regions[(int)center.y * mapSize + (int)center.x];
-                var type = BuildingCatalog.Select(region, mapData.Seed, counts[(int)region]++);
-                mapData.Buildings[i] = new CityBuilding(building.Bounds, building.Door, building.Kind, building.Stock, type);
             }
         }
 

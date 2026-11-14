@@ -1,0 +1,14 @@
+const fs = require('fs');
+const path = require('path');
+const cp = require('child_process');
+const root = path.resolve(__dirname, '../..');
+const work = fs.mkdtempSync(path.join(root, 'RotWorld/Temp/building-distribution-'));
+const scripts = path.join(root, 'RotWorld/Assets/Scripts');
+const unity = process.env.UNITY_EDITOR_DIR || 'C:/Program Files/Unity/Hub/Editor/6000.3.23f1/Editor';
+const files = ['BuildingCatalog', 'CityGenerator', 'CityLayout', 'HumanNeeds', 'ItemDefinition', 'UnitQueryIndex', 'UnitSpatialIndex', 'GridChangeTracker'];
+const includes = files.map(name => '<Compile Include="' + path.join(scripts, name + '.cs') + '"/>').join('');
+fs.writeFileSync(path.join(work, 'Stubs.cs'), 'namespace RotWorld { public sealed class UnitWander {} }');
+fs.writeFileSync(path.join(work, 'Test.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup><ItemGroup>' + includes + '<Compile Include="' + path.join(__dirname, 'BuildingDistribution.cs') + '"/><Compile Include="Stubs.cs"/><Reference Include="UnityEngine.CoreModule"><HintPath>' + path.join(unity, 'Data/Managed/UnityEngine/UnityEngine.CoreModule.dll') + '</HintPath></Reference></ItemGroup></Project>');
+console.log('Building distribution verification: ' + work);
+const result = cp.spawnSync('dotnet', ['run', '--project', path.join(work, 'Test.csproj'), '-c', 'Release', '-v', 'quiet'], { cwd: work, stdio: 'inherit' });
+process.exitCode = result.status ?? 1;

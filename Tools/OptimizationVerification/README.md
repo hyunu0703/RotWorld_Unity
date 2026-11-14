@@ -7,6 +7,7 @@ node Tools/OptimizationVerification/verify.cjs
 node Tools/OptimizationVerification/verify-movement.cjs
 node Tools/OptimizationVerification/verify-dust.cjs
 node Tools/OptimizationVerification/verify-simulation.cjs
+node Tools/OptimizationVerification/verify-buildings.cjs
 ```
 
 일반·이동·연속 시뮬레이션 도구는 설치 위치가 다르면 UNITY_EDITOR_DIR 환경변수에 Editor 디렉터리를 지정할 수 있습니다. 먼지 검증 도구의 기본 설치 경로는 소스의 참조 경로에 표시되어 있습니다. 모든 생성물은 Git에서 무시하는 RotWorld/Temp 아래에 보관합니다.
@@ -54,3 +55,7 @@ Unity 배치 실행이 검증 메서드 진입 전에 종료되어 실제 씬 �
 1024 지도에서 제거한 별도 Color32 배열은 8192 × 8192 × 4바이트, 즉 256MiB입니다. 실제 프로세스 최대 메모리 감소량은 측정하지 않았습니다. 먼지 풀과 경로 캐시는 반복 생성 비용을 줄이는 대신 재사용 용량을 해당 지도 또는 유닛 수명 동안 유지합니다.
 
 생존 시간은 공통 시각에서 빼는 방식이 아니라 동일한 프레임 덧셈을 묶음별로 한 번 적용합니다. 따라서 기존 개인 수치의 덧셈 순서를 유지하며 생성 시점·개별 추가 시간·쓰러짐이 다른 개체는 별도 상태로 분리합니다. 영역별 경로 캐시는 최종 경로만 감시하지 않고 막힌 후보와 대각선 모서리의 실제 점유 조회까지 기록합니다.
+
+## 건물 종류 배정 검증
+
+`verify-buildings.cjs`는 실제 생성기와 종류 배정 코드를 사용해 구역별 목표 비율, 최대 잔여 배분, 1~3채 및 4~8채의 최소 구성, 마을별 독립성, 해안 거리 경계·강 제외·후보 부족 시 재배분, 시드 재현성과 물자 설정 독립성을 확인합니다. 합성 지도와 128·256·512·1024 실제 생성 지도를 사용하며 Unity의 화면 렌더링이나 플레이 모드는 실행하지 않습니다.
