@@ -26,6 +26,7 @@ namespace RotWorld
         private int populationIndex;
         private readonly List<Vector2Int> path = new List<Vector2Int>();
         private int pathIndex;
+        private readonly UnitPathfinder.TargetPathCache pursuitPathCache = new UnitPathfinder.TargetPathCache();
         private Vector2 position;
         private Vector2Int currentTile;
 
@@ -93,12 +94,20 @@ namespace RotWorld
         private Vector2 cooperativeZombieVelocity;
         private float cooperativeMotionSampleTime;
 
+        // 협동 모집과 위협 조회의 재사용 후보 목록
+        private readonly List<int> cooperativeCandidates = new List<int>();
+        private readonly List<int> threatCandidates = new List<int>();
+        private readonly List<int> pursuerCandidates = new List<int>();
+        private readonly List<int> deathCandidates = new List<int>();
+        private const float ActionQueryMargin = .001f;
+
         // 이동 중 출발 및 도착과 대각선 교차 영역 예약
         private bool isDirectPursuit;
         private Vector2? wanderExitTarget;
         internal const float SeparationDistance = .9f;
         private const float PursuitSpeedAdvantage = 1.05f;
         private const float MaximumSubstep = .1f;
+        private readonly List<int> clearanceCandidates = new List<int>();
         private readonly List<Vector2Int> reservations = new List<Vector2Int>();
 
         // 공격 중 이동 차단과 피격 후 비중첩 감속 및 넉백
@@ -117,6 +126,11 @@ namespace RotWorld
         private float knockbackElapsed = KnockbackDuration;
         private const float KnockbackDistance = 1f;
         public Vector2 Position => position;
+        internal int PopulationIndex => populationIndex;
+
+        // 동일한 공유 좌표 상태에서 실패한 변환 위치 검색 재사용
+        private readonly GridChangeTracker.Watch failedConversionWatch = new GridChangeTracker.Watch();
+        private Vector2 failedConversionPosition;
 
         // 유형별 누적 피격 후 쓰러짐과 감염 변환 및 좀비 소멸 상태
         private const int HumanHitsToFall = 2;
@@ -153,7 +167,7 @@ namespace RotWorld
 
             this.map = map;
             isZombie = zombie;
-            Needs = zombie ? null : new HumanNeeds();
+            Needs = zombie ? null : map.NeedsSchedule.Create();
             walkAnimation.SetMap(map);
             walkAnimation.SetUnitType(zombie);
             this.zombieFrames = zombieFrames;
@@ -164,17 +178,17 @@ namespace RotWorld
 
             if (!zombie)
             {
-                map.HumanUnits[index] = this;
+                map.RegisterUnit(false, index, this);
             }
             else
             {
-                map.ZombieUnits[index] = this;
+                map.RegisterUnit(true, index, this);
             }
 
             population = units;
             populationIndex = index;
             currentTile = units[index];
-            position = currentTile;
+            SetPosition(currentTile);
             PublishPosition();
             map.OccupyTile(currentTile);
             random = new System.Random(unchecked(map.Seed * 397 ^ index * 7919 ^ (zombie ? 1 : 0)));
@@ -372,7 +386,7 @@ namespace RotWorld
                     break;
                 }
 
-                position = nextPosition;
+                SetPosition(nextPosition);
                 travelled += step;
                 remainingTime -= step / terrainSpeed;
 
@@ -436,7 +450,7 @@ namespace RotWorld
             if (shouldScan)
             {
                 detectionRemaining = DetectionInterval;
-                chaseTarget = isZombie ? UnitSight.FindChaseHuman(map, position, chaseTarget) : UnitSight.FindFleeZombie(map, position, chaseTarget);
+                SetChaseTarget(isZombie ? UnitSight.FindChaseHuman(map, position, chaseTarget) : UnitSight.FindFleeZombie(map, position, chaseTarget));
                 needsFleePathUpdate = !isZombie && chaseTarget >= 0;
 
                 // 실제 추적자가 한 마리인 도주자만 주변 지원자 모집
@@ -522,9 +536,11 @@ namespace RotWorld
             // 감지된 좀비 수가 아닌 실제 추적 대상 기록으로 단일 추적자 확인
             UnitWander pursuer = null;
 
-            foreach (var zombie in map.ZombieUnits.Values)
+            map.CollectPursuers(populationIndex, pursuerCandidates);
+
+            foreach (int index in pursuerCandidates)
             {
-                if (zombie == null || !zombie.IsZombieTarget || !zombie.isActiveAndEnabled || zombie.chaseTarget != populationIndex)
+                if (!map.ZombieUnits.TryGetValue(index, out UnitWander zombie) || zombie == null || !zombie.IsZombieTarget || !zombie.isActiveAndEnabled || zombie.chaseTarget != populationIndex)
                 {
                     continue;
                 }
@@ -552,9 +568,9 @@ namespace RotWorld
 
             // 도주자 공격 중단과 지원자의 지정 좀비 추격 시작
             cooperativeHelper = helper;
-            cooperativeZombie = pursuer;
+            SetCooperativeZombie(pursuer);
             helper.cooperativeLeader = this;
-            helper.cooperativeZombie = pursuer;
+            helper.SetCooperativeZombie(pursuer);
             helper.cooperativePreviousZombiePosition = pursuer.position;
             helper.cooperativeZombieVelocity = Vector2.zero;
             helper.cooperativeMotionSampleTime = Time.time;
@@ -579,8 +595,12 @@ namespace RotWorld
             UnitWander helper = null;
             float bestDistance = CooperativeRecruitRadius * CooperativeRecruitRadius;
 
-            foreach (var human in map.HumanUnits.Values)
+            map.HumanQueries.Collect(position, CooperativeRecruitRadius + ActionQueryMargin, cooperativeCandidates, false);
+
+            foreach (int index in cooperativeCandidates)
             {
+                UnitWander human = map.HumanUnits[index];
+
                 if (human == null || human == this || !human.IsHumanTarget || !human.isActiveAndEnabled ||
                     human.cooperativeLeader != null || human.cooperativeHelper != null || human.IsGrabbed ||
                     human.knockbackElapsed < KnockbackDuration)
@@ -590,7 +610,9 @@ namespace RotWorld
 
                 float distance = (human.position - position).sqrMagnitude;
 
-                if (distance > bestDistance || target.chaseTarget == human.populationIndex || human.HasOtherZombieThreat(target))
+                if (distance > bestDistance || (helper != null && distance == bestDistance &&
+                    map.HumanQueries.Compare(index, helper.populationIndex) < 0) ||
+                    target.chaseTarget == human.populationIndex || human.HasOtherZombieThreat(target))
                 {
                     continue;
                 }
@@ -838,7 +860,7 @@ namespace RotWorld
                 patient.cooperativeRetreatUntil = Time.time + CooperativeRescueRetreatDuration;
             }
 
-            target.chaseTarget = populationIndex;
+            target.SetChaseTarget(populationIndex);
             target.detectionRemaining = DetectionInterval;
             cooperativeLeader.TransferCooperativeLeadership(this);
         }
@@ -864,9 +886,25 @@ namespace RotWorld
         // 참여자에게 적용할 추가 좀비의 근접 또는 추적 위협 조회
         private bool HasOtherZombieThreat(UnitWander target)
         {
-            // 건물 차폐와 무관한 5타일 거리 및 다른 좀비의 추적 기록 검사
-            foreach (var zombie in map.ZombieUnits.Values)
+            // 거리 밖 추적자도 기존 위협 규칙에 포함
+            map.CollectPursuers(populationIndex, pursuerCandidates);
+
+            foreach (int index in pursuerCandidates)
             {
+                if (map.ZombieUnits.TryGetValue(index, out UnitWander pursuer) && pursuer != null && pursuer != target &&
+                    pursuer.IsZombieTarget && pursuer.isActiveAndEnabled)
+                {
+                    return true;
+                }
+            }
+
+            // 건물 차폐와 무관한 주변 5타일 위협만 추가 확인
+            map.ZombieQueries.Collect(position, CooperativeDangerRadius + ActionQueryMargin, threatCandidates, false);
+
+            foreach (int index in threatCandidates)
+            {
+                UnitWander zombie = map.ZombieUnits[index];
+
                 if (zombie == null || zombie == target || !zombie.IsZombieTarget || !zombie.isActiveAndEnabled)
                 {
                     continue;
@@ -914,17 +952,23 @@ namespace RotWorld
             // 양방향 연결의 소유 도주자를 통해 동일한 종료 처리 적용
             UnitWander leader = cooperativeLeader != null ? cooperativeLeader : cooperativeHelper != null ? this : null;
 
+            // 상태 변경 전 동일한 협동 유효성 결과 재사용
+            bool canContinue = leader != null && CanContinueCooperativeAttack();
+
             // 세 명의 협동에서 좀비가 다른 참여자를 추적하면 새 유인자로 전환
-            if (leader != null && leader.cooperativeSecondHelper != null && CanContinueCooperativeAttack() &&
+            if (leader != null && leader.cooperativeSecondHelper != null && canContinue &&
                 leader.cooperativeZombie.chaseTarget != leader.populationIndex)
             {
                 UnitWander nextLeader = leader.cooperativeZombie.chaseTarget == leader.cooperativeHelper.populationIndex
                     ? leader.cooperativeHelper : leader.cooperativeSecondHelper;
                 leader.TransferCooperativeLeadership(nextLeader);
                 leader = nextLeader;
+
+                // 역할 이전의 상태 변경을 반영한 유효성 재확인
+                canContinue = CanContinueCooperativeAttack();
             }
 
-            if (leader != null && !CanContinueCooperativeAttack())
+            if (leader != null && !canContinue)
             {
                 leader.StopCooperativeAttack();
             }
@@ -956,7 +1000,7 @@ namespace RotWorld
             nextLeader.cooperativeLeader = null;
             nextLeader.cooperativeHelper = first;
             nextLeader.cooperativeSecondHelper = second;
-            nextLeader.cooperativeZombie = target;
+            nextLeader.SetCooperativeZombie(target);
             nextLeader.cooperativeNextAttacker = first;
             nextLeader.cooperativeNextAttackTime = Time.time + CooperativeStrikeSpacing;
             nextLeader.cooperativeRescueTarget = null;
@@ -979,7 +1023,7 @@ namespace RotWorld
         {
             // 새 유인자와 지정 좀비를 전달하고 이전 공격 및 예측 속도 폐기
             helper.cooperativeLeader = this;
-            helper.cooperativeZombie = cooperativeZombie;
+            helper.SetCooperativeZombie(cooperativeZombie);
             helper.cooperativePreviousZombiePosition = cooperativeZombie.position;
             helper.cooperativeZombieVelocity = Vector2.zero;
             helper.cooperativeMotionSampleTime = Time.time;
@@ -1000,7 +1044,7 @@ namespace RotWorld
             cooperativeNextAttacker = null;
             cooperativeRescueTarget = null;
             cooperativeRescuer = null;
-            cooperativeZombie = null;
+            SetCooperativeZombie(null);
             combat.CancelAttack();
             ResetCooperativeMovement();
             DetachCooperativeHelper(helper);
@@ -1018,7 +1062,7 @@ namespace RotWorld
             }
 
             helper.cooperativeLeader = null;
-            helper.cooperativeZombie = null;
+            helper.SetCooperativeZombie(null);
             helper.cooperativeZombieVelocity = Vector2.zero;
             helper.cooperativeRetreatUntil = 0f;
             helper.combat.CancelAttack();
@@ -1168,11 +1212,18 @@ namespace RotWorld
 
                 // 기존 충돌 검사와 점유 갱신을 유지한 소단위 연속 이동
                 float distance = Vector2.Distance(position, next);
-                map.ReleaseTile(currentTile);
-                currentTile = Vector2Int.RoundToInt(next);
-                map.OccupyTile(currentTile);
+                // 실제 타일이 바뀐 소단계에서만 점유 참조 수 갱신
+                Vector2Int nextTile = Vector2Int.RoundToInt(next);
+
+                if (nextTile != currentTile)
+                {
+                    map.ReleaseTile(currentTile);
+                    currentTile = nextTile;
+                    map.OccupyTile(currentTile);
+                }
+
                 direction = next - position;
-                position = next;
+                SetPosition(next);
                 cooperativeOrbitAngle = nextAngle;
                 travelled += distance;
 
@@ -1406,6 +1457,8 @@ namespace RotWorld
             // 쓰러진 참여자의 합동 공격 연결 즉시 해제
             ReleaseCooperativeAttack();
 
+            Needs.Freeze();
+
             // 쓰러진 인간의 이동 예약과 타일 점유 및 실제 충돌 좌표 반환
             isDowned = true;
             downedElapsed = 0f;
@@ -1414,7 +1467,10 @@ namespace RotWorld
             knockbackFinishedFrame = Time.frameCount;
             ReleaseReservations();
             map.ReleaseTile(currentTile);
-            map.HumanPositions.Remove(populationIndex);
+            map.RemoveUnitPosition(false, populationIndex);
+
+            map.HumanSpatialIndex.Remove(populationIndex);
+            map.HumanQueries.Remove(populationIndex);
             path.Clear();
             pathIndex = 0;
             hasChasePath = false;
@@ -1426,9 +1482,13 @@ namespace RotWorld
             walkAnimation.SetConversionProgress(conversionFrames, 0f);
             combat.FlashHit();
 
-            foreach (var zombie in map.ZombieUnits.Values)
+            // 기존 사전 순서로 현재 추적자에게만 인간 상실 통지
+            map.CollectPursuers(populationIndex, deathCandidates);
+            map.ZombieQueries.SortInOriginalOrder(deathCandidates);
+
+            foreach (int index in deathCandidates)
             {
-                if (zombie != null)
+                if (map.ZombieUnits.TryGetValue(index, out UnitWander zombie) && zombie != null)
                 {
                     zombie.ForgetHuman(this, populationIndex);
                 }
@@ -1446,11 +1506,14 @@ namespace RotWorld
             knockbackFinishedFrame = Time.frameCount;
             ReleaseReservations();
             map.ReleaseTile(currentTile);
-            map.ZombiePositions.Remove(populationIndex);
+            map.RemoveUnitPosition(true, populationIndex);
+
+            map.ZombieSpatialIndex.Remove(populationIndex);
+            map.ZombieQueries.Remove(populationIndex);
             path.Clear();
             pathIndex = 0;
             hasChasePath = false;
-            chaseTarget = -1;
+            SetChaseTarget(-1);
             isDirectPursuit = false;
             wanderExitTarget = null;
 
@@ -1458,9 +1521,11 @@ namespace RotWorld
             map.InactiveZombies.Add(populationIndex);
 
             // 소멸 연출과 분리해 관련 인간의 공격과 협동 추적을 즉시 해제
-            foreach (var human in map.HumanUnits.Values)
+            map.CollectZombieDependents(populationIndex, deathCandidates);
+
+            foreach (int index in deathCandidates)
             {
-                if (human != null)
+                if (map.HumanUnits.TryGetValue(index, out UnitWander human) && human != null)
                 {
                     human.ForgetZombie(this, populationIndex);
                 }
@@ -1498,7 +1563,7 @@ namespace RotWorld
 
             combat.CancelHumanTarget(human);
             ReleaseReservations();
-            chaseTarget = -1;
+            SetChaseTarget(-1);
             hasChasePath = false;
             isDirectPursuit = false;
             path.Clear();
@@ -1562,7 +1627,7 @@ namespace RotWorld
             ResetCooperativeMovement();
             needsFleePathUpdate = false;
             wanderExitTarget = null;
-            chaseTarget = UnitSight.FindFleeZombie(map, position, -1);
+            SetChaseTarget(UnitSight.FindFleeZombie(map, position, -1));
 
             if (chaseTarget >= 0)
             {
@@ -1655,7 +1720,7 @@ namespace RotWorld
                 }
 
                 map.ReleaseTile(currentTile);
-                position = next;
+                SetPosition(next);
                 currentTile = Vector2Int.RoundToInt(position);
                 map.OccupyTile(currentTile);
                 remaining -= step;
@@ -1691,6 +1756,12 @@ namespace RotWorld
                 return;
             }
 
+            // 이전 실패 뒤 실제 충돌 좌표가 그대로면 기존 실패 결과 유지
+            if (failedConversionPosition.Equals(position) && failedConversionWatch.TryRefresh(map.PositionChanges))
+            {
+                return;
+            }
+
             Vector2? destination = null;
             const int PlacementRadius = 4;
             float nearest = float.PositiveInfinity;
@@ -1715,30 +1786,36 @@ namespace RotWorld
             // 빈 공간이 없으면 쓰러진 상태에서 재시도하여 중복 생성 방지
             if (!destination.HasValue)
             {
+                failedConversionWatch.Reset(map.PositionChanges);
+                failedConversionWatch.RecordArea(position, PlacementRadius + SeparationDistance + ActionQueryMargin);
+                failedConversionPosition = position;
                 return;
             }
 
             int oldIndex = populationIndex;
             map.ConvertedHumans.Add(oldIndex);
-            map.HumanUnits.Remove(oldIndex);
-            map.HumanPositions.Remove(oldIndex);
+            map.ChangeZombieDependent(oldIndex, chaseTarget, -1);
+            map.RemoveUnit(false, oldIndex);
+            map.RemoveUnitPosition(false, oldIndex);
+
+            map.HumanSpatialIndex.Remove(oldIndex);
             map.HumanSpeeds.Remove(oldIndex);
             map.HumanDestinations.Remove(oldIndex);
 
             // 쓰러질 때 반환한 점유를 재해제하지 않고 변환 위치에서 새 점유 확보
-            position = destination.Value;
+            SetPosition(destination.Value);
             currentTile = Vector2Int.RoundToInt(position);
             map.OccupyTile(currentTile);
             population = map.Zombies;
             populationIndex = population.Count;
             population.Add(currentTile);
-            map.ZombieUnits[populationIndex] = this;
+            map.RegisterUnit(true, populationIndex, this);
             isZombie = true;
             Needs = null;
             isDowned = false;
             hasBeenHit = false;
             hitCount = 0;
-            chaseTarget = -1;
+            SetChaseTarget(-1);
             riseRemaining = RiseDuration;
             walkAnimation.ChangeToZombie(zombieFrames);
             combat.BecomeZombie();
@@ -1755,17 +1832,21 @@ namespace RotWorld
         private bool HasConversionClearance(Vector2 candidate)
         {
             // 쓰러질 때 제거된 충돌 좌표를 제외한 활동 개체의 간격 확인
-            foreach (var human in map.HumanPositions)
+            map.HumanSpatialIndex.Collect(candidate, SeparationDistance, clearanceCandidates);
+
+            foreach (int index in clearanceCandidates)
             {
-                if (human.Key != populationIndex && Vector2.Distance(candidate, human.Value) < SeparationDistance)
+                if (index != populationIndex && Vector2.Distance(candidate, map.HumanPositions[index]) < SeparationDistance)
                 {
                     return false;
                 }
             }
 
-            foreach (var zombie in map.ZombiePositions.Values)
+            map.ZombieSpatialIndex.Collect(candidate, SeparationDistance, clearanceCandidates);
+
+            foreach (int index in clearanceCandidates)
             {
-                if (Vector2.Distance(candidate, zombie) < SeparationDistance)
+                if (Vector2.Distance(candidate, map.ZombiePositions[index]) < SeparationDistance)
                 {
                     return false;
                 }
@@ -1821,10 +1902,17 @@ namespace RotWorld
                     break;
                 }
 
-                map.ReleaseTile(currentTile);
-                currentTile = Vector2Int.RoundToInt(next);
-                map.OccupyTile(currentTile);
-                position = next;
+                // 실제 타일이 바뀐 소단계에서만 점유 참조 수 갱신
+                Vector2Int nextTile = Vector2Int.RoundToInt(next);
+
+                if (nextTile != currentTile)
+                {
+                    map.ReleaseTile(currentTile);
+                    currentTile = nextTile;
+                    map.OccupyTile(currentTile);
+                }
+
+                SetPosition(next);
                 travelled += step;
                 knockbackRemaining = Mathf.Max(0f, KnockbackDistance - travelled);
             }
@@ -1994,7 +2082,7 @@ namespace RotWorld
 
             if (hasTarget && !IsTerrainClear(position, target))
             {
-                UnitPathfinder.FindTargetPath(map, currentTile, Vector2Int.RoundToInt(target), path);
+                pursuitPathCache.Find(map, currentTile, Vector2Int.RoundToInt(target), path);
 
                 if (path.Count == 0)
                 {
@@ -2024,7 +2112,8 @@ namespace RotWorld
                 float available = hasTarget && waypoint == target ? Mathf.Max(0f, distance - attackRange) : distance;
                 float step = Mathf.Min(remaining, MaximumSubstep, available);
 
-                if (step <= 0f)
+                // 표현 가능한 잔여 거리 감소가 없는 소단계의 반복 차단
+                if (step <= 0f || remaining - step >= remaining)
                 {
                     break;
                 }
@@ -2060,12 +2149,25 @@ namespace RotWorld
                     }
                 }
 
+                // 공격 거리 경계의 반올림으로 좌표가 그대로인 경우 반복 종료
+                if (next.Equals(position))
+                {
+                    break;
+                }
+
                 tile = Vector2Int.RoundToInt(next);
-                map.ReleaseTile(currentTile);
-                currentTile = tile;
-                map.OccupyTile(currentTile);
+                // 실제 타일이 바뀐 소단계에서만 점유 참조 수 갱신
+                Vector2Int nextTile = tile;
+
+                if (nextTile != currentTile)
+                {
+                    map.ReleaseTile(currentTile);
+                    currentTile = nextTile;
+                    map.OccupyTile(currentTile);
+                }
+
                 direction = next - position;
-                position = next;
+                SetPosition(next);
                 travelled += step;
                 remaining -= step;
             }
@@ -2118,10 +2220,17 @@ namespace RotWorld
         private bool IsTerrainClear(Vector2 from, Vector2 to)
         {
             // 건물 표시의 실제 경계와 스프라이트 불투명 영역으로 연속 충돌 검사
+            if (map == null)
+            {
+                return false;
+            }
+
             int samples = Mathf.Max(1, Mathf.CeilToInt(Vector2.Distance(from, to) / MaximumSubstep));
             Vector2Int previous = Vector2Int.RoundToInt(from);
             Vector2 previousPosition = from;
             Rect body = UnitWalkAnimation.BodyBounds;
+            bool hasValidated = false;
+            RectInt validatedBodyTiles = default;
 
             for (int i = 1; i <= samples; i++)
             {
@@ -2132,12 +2241,32 @@ namespace RotWorld
                     Mathf.Max(previousPosition.x, next.x) + body.xMax,
                     Mathf.Max(previousPosition.y, next.y) + body.yMax);
 
-                if (!UnitPathfinder.HasBuildingClearance(map, sweptBody) || !UnitPathfinder.CanOccupy(map, tile) ||
-                    !UnitPathfinder.CanOccupy(map, new Vector2Int(previous.x, tile.y)) ||
-                    !UnitPathfinder.CanOccupy(map, new Vector2Int(tile.x, previous.y)))
+                // 동일한 몸체 타일 집합은 구간 안에서 한 번만 건물 검사
+                if (sweptBody.xMin < 0f || sweptBody.yMin < 0f || sweptBody.xMax > map.Size || sweptBody.yMax > map.Size)
                 {
                     return false;
                 }
+
+                int bodyMinX = Mathf.FloorToInt(sweptBody.xMin);
+                int bodyMinY = Mathf.FloorToInt(sweptBody.yMin);
+                var bodyTiles = new RectInt(bodyMinX, bodyMinY, Mathf.CeilToInt(sweptBody.xMax) - bodyMinX,
+                    Mathf.CeilToInt(sweptBody.yMax) - bodyMinY);
+
+                if ((!hasValidated || bodyTiles != validatedBodyTiles) && !UnitPathfinder.HasBuildingClearance(map, sweptBody))
+                {
+                    return false;
+                }
+
+                // 이전 표본과 타일이 같은 경우 통행 및 대각선 검사의 중복 제거
+                if ((!hasValidated || tile != previous) && (!UnitPathfinder.CanOccupy(map, tile) ||
+                    !UnitPathfinder.CanOccupy(map, new Vector2Int(previous.x, tile.y)) ||
+                    !UnitPathfinder.CanOccupy(map, new Vector2Int(tile.x, previous.y))))
+                {
+                    return false;
+                }
+
+                hasValidated = true;
+                validatedBodyTiles = bodyTiles;
 
                 previous = tile;
                 previousPosition = next;
@@ -2151,22 +2280,28 @@ namespace RotWorld
         private bool HasUnitClearance(Vector2 next)
         {
             // 이미 근접한 상대와는 멀어지는 이동과 넉백을 허용
-            foreach (var human in map.HumanPositions)
+            // 거리 허용 오차를 포함한 주변 후보에 기존 분리 판정 적용
+            const float QueryMargin = .001f;
+            map.HumanSpatialIndex.Collect(next, SeparationDistance + QueryMargin, clearanceCandidates);
+
+            foreach (int index in clearanceCandidates)
             {
-                if (!isZombie && human.Key == populationIndex)
+                if (!isZombie && index == populationIndex)
                 {
                     continue;
                 }
 
-                if (!CanSeparateFrom(position, next, human.Value, SeparationDistance))
+                if (!CanSeparateFrom(position, next, map.HumanPositions[index], SeparationDistance))
                 {
                     return false;
                 }
             }
 
-            foreach (var zombie in map.ZombiePositions)
+            map.ZombieSpatialIndex.Collect(next, SeparationDistance + QueryMargin, clearanceCandidates);
+
+            foreach (int index in clearanceCandidates)
             {
-                if ((!isZombie || zombie.Key != populationIndex) && !CanSeparateFrom(position, next, zombie.Value, SeparationDistance))
+                if ((!isZombie || index != populationIndex) && !CanSeparateFrom(position, next, map.ZombiePositions[index], SeparationDistance))
                 {
                     return false;
                 }
@@ -2186,12 +2321,64 @@ namespace RotWorld
                 nextDistance > (from - other).sqrMagnitude;
         }
 
+
+        // 실제 위치와 행동 검색 격자의 동시 변경
+        private void SetPosition(Vector2 next)
+        {
+            // 쓰러진 개체의 변환 위치 확정 전 행동 검색 등록 제외
+            position = next;
+
+            if (!isDowned)
+            {
+                (isZombie ? map.ZombieQueries : map.HumanQueries).SetPosition(populationIndex, position);
+            }
+        }
+
+
+        // 협동 대상 변경과 좀비별 인간 관계 참조 수 동기화
+        private void SetCooperativeZombie(UnitWander next)
+        {
+            // 역할만 교환되고 대상이 같으면 기존 참조 유지
+            if (cooperativeZombie == next)
+            {
+                return;
+            }
+
+            map.ChangeZombieDependent(populationIndex, cooperativeZombie == null ? -1 : cooperativeZombie.populationIndex,
+                next == null ? -1 : next.populationIndex);
+            cooperativeZombie = next;
+        }
+
+
+        // 추적 대상 변경과 인간별 추적 관계 동기화
+        private void SetChaseTarget(int next)
+        {
+            // 기존 대상 유지 시 집합 갱신 생략
+            if (next == chaseTarget)
+            {
+                return;
+            }
+
+            if (isZombie)
+            {
+                map.ChangePursuer(populationIndex, chaseTarget, next);
+            }
+            else
+            {
+                map.ChangeZombieDependent(populationIndex, chaseTarget, next);
+            }
+
+            chaseTarget = next;
+        }
+
+
         // 감지와 추적에서 참조할 실제 좌표 및 구간 목적지 공유
         private void PublishPosition()
         {
             // 정수 인구 목록과 별도로 연속 이동 좌표 전달
-            var positions = isZombie ? map.ZombiePositions : map.HumanPositions;
-            positions[populationIndex] = position;
+            map.PublishUnitPosition(isZombie, populationIndex, position);
+            (isZombie ? map.ZombieQueries : map.HumanQueries).SetPosition(populationIndex, position);
+            (isZombie ? map.ZombieSpatialIndex : map.HumanSpatialIndex).SetPosition(populationIndex, position);
 
             if (!isZombie && position == (Vector2)currentTile)
             {
@@ -2295,20 +2482,37 @@ namespace RotWorld
             {
                 ReleaseReservations();
 
+                if (Needs != null)
+                {
+                    Needs.Freeze();
+                }
+
+                if (isZombie)
+                {
+                    map.ChangePursuer(populationIndex, chaseTarget, -1);
+                }
+
                 // 시체는 쓰러질 때 점유를 반환하므로 다른 개체의 점유 해제 방지
                 if (!isDowned)
                 {
                     map.ReleaseTile(currentTile);
                 }
 
-                (isZombie ? map.ZombiePositions : map.HumanPositions).Remove(populationIndex);
-                (isZombie ? map.ZombieUnits : map.HumanUnits).Remove(populationIndex);
+                map.RemoveUnitPosition(isZombie, populationIndex);
+
+                (isZombie ? map.ZombieSpatialIndex : map.HumanSpatialIndex).Remove(populationIndex);
+                if (!isZombie)
+                {
+                    map.ChangeZombieDependent(populationIndex, chaseTarget, -1);
+                }
+
+                map.RemoveUnit(isZombie, populationIndex);
 
                 if (!isZombie)
                 {
                     map.HumanDestinations.Remove(populationIndex);
                     map.HumanSpeeds.Remove(populationIndex);
-                    map.HumanUnits.Remove(populationIndex);
+                    map.RemoveUnit(false, populationIndex);
                 }
             }
         }

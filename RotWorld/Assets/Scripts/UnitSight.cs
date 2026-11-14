@@ -7,6 +7,10 @@ namespace RotWorld
     /// </summary>
     public static class UnitSight
     {
+        // 메인 스레드의 순차 감지에서 재사용하는 인덱스 후보
+        private const float QueryMargin = .001f;
+        private static readonly System.Collections.Generic.List<int> Candidates = new System.Collections.Generic.List<int>();
+
         // 최초 감지와 유형별 반응 종료 거리
         public const float DetectionRadius = 5f;
         public const float FleeReleaseRadius = 15f;
@@ -95,7 +99,9 @@ namespace RotWorld
             // 재사용 목록에 원형 8타일 범위의 활동 중인 좀비만 저장
             threats.Clear();
 
-            for (int i = 0; i < map.Zombies.Count; i++)
+            CollectCandidates(map, observer, map.Zombies, FleeScanRadius);
+
+            foreach (int i in Candidates)
             {
                 if (map.InactiveZombies.Contains(i))
                 {
@@ -120,7 +126,9 @@ namespace RotWorld
             int nearest = -1;
             float bestDistance = radius * radius;
 
-            for (int i = 0; i < units.Count; i++)
+            CollectCandidates(map, observer, units, radius, false);
+
+            foreach (int i in Candidates)
             {
 
                 // 쓰러진 인간과 좀비는 감지 및 위협 대상에서 제외
@@ -133,7 +141,7 @@ namespace RotWorld
                 Vector2 target = livePositions.TryGetValue(i, out Vector2 livePosition) ? livePosition : (Vector2)units[i];
                 float distance = (target - observer).sqrMagnitude;
 
-                if (distance > bestDistance || (requireLineOfSight && !HasLineOfSight(map, observer, target)))
+                if (distance > bestDistance || (distance == bestDistance && i < nearest) || (requireLineOfSight && !HasLineOfSight(map, observer, target)))
                 {
                     continue;
                 }
@@ -143,6 +151,35 @@ namespace RotWorld
             }
 
             return nearest;
+        }
+
+
+        // 기존 인구 순서를 유지하는 주변 감지 후보 수집
+        private static void CollectCandidates(CityMap map, Vector2 observer, System.Collections.Generic.List<Vector2Int> units, float radius, bool preserveOrder = true)
+        {
+            // 초기화 전 실제 좌표가 없는 개체는 기존 타일 기반 검색 유지
+            bool humans = units == map.Humans;
+            var positions = humans ? map.HumanPositions : map.ZombiePositions;
+            var inactive = humans ? map.InactiveHumans : map.InactiveZombies;
+
+            if (positions.Count != units.Count - inactive.Count)
+            {
+                Candidates.Clear();
+
+                for (int i = 0; i < units.Count; i++)
+                {
+                    Candidates.Add(i);
+                }
+
+                return;
+            }
+
+            // 원형 거리 판정 전 격자 후보 제한 및 기존 인덱스 동점 순서 복원
+            (humans ? map.HumanSpatialIndex : map.ZombieSpatialIndex).Collect(observer, radius + QueryMargin, Candidates);
+            if (preserveOrder)
+            {
+                Candidates.Sort();
+            }
         }
 
 
@@ -160,7 +197,22 @@ namespace RotWorld
 
             for (int y = minY; y <= maxY; y++)
             {
-                for (int x = minX; x <= maxX; x++)
+                // 해당 행을 통과하는 선분 구간만 보수적으로 후보 제한
+                float rowEnter = 0f;
+                float rowExit = 1f;
+
+                if (!IntersectsAxis(start.y, delta.y, y, ref rowEnter, ref rowExit))
+                {
+                    continue;
+                }
+
+                // 반올림과 모서리 접촉을 포함한 한 타일 여유 및 기존 교차 판정 유지
+                double firstX = start.x + (double)delta.x * rowEnter;
+                double lastX = start.x + (double)delta.x * rowExit;
+                int rowMinX = Mathf.Max(minX, (int)System.Math.Floor(System.Math.Min(firstX, lastX)) - 1);
+                int rowMaxX = Mathf.Min(maxX, (int)System.Math.Floor(System.Math.Max(firstX, lastX)) + 1);
+
+                for (int x = rowMinX; x <= rowMaxX; x++)
                 {
                     if (map.Tiles[y * map.Size + x] != CityGenerator.Building)
                     {

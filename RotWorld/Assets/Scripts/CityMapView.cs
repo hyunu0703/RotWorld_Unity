@@ -1,3 +1,4 @@
+using Unity.Collections;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
@@ -18,6 +19,15 @@ namespace RotWorld
         private const int ToolbarHeightAllowance = 100;
         private const float OverviewMarginScale = 1.12f;
         private const int CameraDepth = -10;
+
+        // 카메라 계산 입력과 마지막 적용 상태
+        private CityMap cameraMap;
+        private Vector2 cameraCenter;
+        private int cameraZoom = -1;
+        private int cameraWidth;
+        private int cameraHeight;
+        private float cameraSize;
+        private Vector3 cameraPosition;
 
         // 타일 좌표 해시와 지형 질감 빈도
         private const int HorizontalHashMultiplier = 73856093;
@@ -76,73 +86,25 @@ namespace RotWorld
         {
             // 지도 타일과 시드에서 원본 픽셀 색상 생성
             int width = map.Size * PixelsPerTile;
-            var pixels = new Color32[width * width];
 
-            for (int y = 0; y < width; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    byte tile = map.Tiles[(y / PixelsPerTile) * map.Size + x / PixelsPerTile];
-                    uint hash = unchecked((uint)(x * HorizontalHashMultiplier ^ y * VerticalHashMultiplier ^ map.Seed));
-                    Color32 color = tile == CityGenerator.Grass
-                        ? ((hash % GrassVariationInterval == 0) ? Hex(0x6f8051) : Hex(0x61764a))
-                        : tile == CityGenerator.Ocean ? Hex(0x264d68)
-                        : tile == CityGenerator.Shallows ? Hex(0x397f91)
-                        : tile == CityGenerator.River ? Hex(0x397f91)
-                        : tile == CityGenerator.Bridge ? Hex(0x9e947c)
-                        : tile == CityGenerator.Sand
-                            ? ((hash % SandVariationInterval == 0) ? Hex(0xc4b57c) : Hex(0xd2c38e))
-                        : tile == CityGenerator.Road ? Hex(0x454c51)
-                        : tile == CityGenerator.Path ? Hex(0xb5ab8d) : Hex(0x91978c);
-
-                    if (tile == CityGenerator.Pavement && (x % PixelsPerTile == 0 || y % PixelsPerTile == 0))
-                    {
-                        color = Hex(0x7f877e);
-                    }
-
-                    CityRegion region = map.Regions[(y / PixelsPerTile) * map.Size + x / PixelsPerTile];
-
-                    if (tile == CityGenerator.Grass)
-                    {
-                        if (region == CityRegion.Downtown)
-                        {
-                            color = Hex(0x85877b);
-                        }
-                        else if (region == CityRegion.Industrial)
-                        {
-                            color = Hex(0x8e8876);
-                        }
-                        else if (region == CityRegion.Riverside)
-                        {
-                            color = Hex(0x70865b);
-                        }
-                        else if (region == CityRegion.Natural)
-                        {
-                            color = Hex(0x526d45);
-                        }
-                    }
-
-                    if (tile == CityGenerator.Bridge && (x % PixelsPerTile == 0 || y % PixelsPerTile == 0))
-                    {
-                        color = Hex(0x766e61);
-                    }
-
-                    pixels[y * width + x] = color;
-                }
-            }
-
-            foreach (var building in map.Buildings)
-            {
-                DrawBuilding(pixels, width, building);
-            }
-
-            // 완성된 픽셀 배열을 원본 표시 자원에 업로드
+            // 텍스처 소유 버퍼에 직접 기록해 별도 대형 배열과 업로드 복사 제거
             var nextTexture = new Texture2D(width, width, TextureFormat.RGBA32, false);
             nextTexture.name = "City pixels";
             nextTexture.filterMode = FilterMode.Point;
             nextTexture.wrapMode = TextureWrapMode.Clamp;
-            nextTexture.SetPixels32(pixels);
-            nextTexture.Apply(false, true);
+            var pixels = nextTexture.GetRawTextureData<Color32>();
+
+            try
+            {
+                PaintMap(map, width, pixels);
+            }
+            catch
+            {
+                // 픽셀 구성 실패 시 새 텍스처 반환 및 호출자 오류 처리 전달
+                Destroy(nextTexture);
+                throw;
+            }
+
             var nextSprite = Sprite.Create(nextTexture, new Rect(0, 0, width, width), Vector2.zero, PixelsPerTile, 0, SpriteMeshType.FullRect);
             // 전체 보기에서는 최대 256픽셀 지도로 명시적 간소화
             int overviewSize = Mathf.Min(MaximumOverviewSize, map.Size);
@@ -157,6 +119,8 @@ namespace RotWorld
                 }
             }
 
+            // 전체 보기 샘플링 완료 후 CPU 버퍼 해제 및 GPU 업로드
+            nextTexture.Apply(false, true);
             var nextOverview = new Texture2D(overviewSize, overviewSize, TextureFormat.RGBA32, false);
             nextOverview.name = "Island overview pixels";
             nextOverview.filterMode = FilterMode.Point;
@@ -196,7 +160,92 @@ namespace RotWorld
 
             viewCenter = new Vector2(map.Size / 2f, map.Size / 2f);
             zoom = 0;
+            cameraZoom = -1;
             UpdateCamera();
+        }
+
+
+        // 텍스처 소유 픽셀 버퍼에 지도와 건물의 동일 색상 기록
+        private static void PaintMap(CityMap map, int width, NativeArray<Color32> pixels)
+        {
+            // 타일별 공통 조회 후 기존 전역 픽셀 좌표의 질감과 경계 유지
+            for (int tileY = 0; tileY < map.Size; tileY++)
+            {
+                for (int tileX = 0; tileX < map.Size; tileX++)
+                {
+                    int tileIndex = tileY * map.Size + tileX;
+                    byte tile = map.Tiles[tileIndex];
+                    CityRegion region = map.Regions[tileIndex];
+                    bool grassVariation = tile == CityGenerator.Grass;
+                    Color32 baseColor = tile == CityGenerator.Grass ? Hex(0x61764a)
+                        : tile == CityGenerator.Ocean ? Hex(0x264d68)
+                        : tile == CityGenerator.Shallows || tile == CityGenerator.River ? Hex(0x397f91)
+                        : tile == CityGenerator.Bridge ? Hex(0x9e947c)
+                        : tile == CityGenerator.Sand ? Hex(0xd2c38e)
+                        : tile == CityGenerator.Road ? Hex(0x454c51)
+                        : tile == CityGenerator.Path ? Hex(0xb5ab8d) : Hex(0x91978c);
+
+                    if (tile == CityGenerator.Grass)
+                    {
+                        if (region == CityRegion.Downtown)
+                        {
+                            baseColor = Hex(0x85877b);
+                            grassVariation = false;
+                        }
+                        else if (region == CityRegion.Industrial)
+                        {
+                            baseColor = Hex(0x8e8876);
+                            grassVariation = false;
+                        }
+                        else if (region == CityRegion.Riverside)
+                        {
+                            baseColor = Hex(0x70865b);
+                            grassVariation = false;
+                        }
+                        else if (region == CityRegion.Natural)
+                        {
+                            baseColor = Hex(0x526d45);
+                            grassVariation = false;
+                        }
+                    }
+
+                    bool hasVariation = grassVariation || tile == CityGenerator.Sand;
+                    bool hasBorder = tile == CityGenerator.Pavement || tile == CityGenerator.Bridge;
+                    Color32 borderColor = tile == CityGenerator.Pavement ? Hex(0x7f877e) : Hex(0x766e61);
+
+                    for (int pixelY = 0; pixelY < PixelsPerTile; pixelY++)
+                    {
+                        int y = tileY * PixelsPerTile + pixelY;
+
+                        for (int pixelX = 0; pixelX < PixelsPerTile; pixelX++)
+                        {
+                            int x = tileX * PixelsPerTile + pixelX;
+                            Color32 color = baseColor;
+
+                            if (hasVariation)
+                            {
+                                // 기존 전역 픽셀 해시와 색상 분포 유지
+                                uint hash = unchecked((uint)(x * HorizontalHashMultiplier ^ y * VerticalHashMultiplier ^ map.Seed));
+                                bool alternate = hash % (grassVariation ? GrassVariationInterval : SandVariationInterval) == 0;
+                                color = alternate ? (grassVariation ? Hex(0x6f8051) : Hex(0xc4b57c)) : baseColor;
+                            }
+
+                            if (hasBorder && (pixelX == 0 || pixelY == 0))
+                            {
+                                color = borderColor;
+                            }
+
+                            pixels[y * width + x] = color;
+                        }
+                    }
+                }
+            }
+
+            foreach (var building in map.Buildings)
+            {
+                DrawBuilding(pixels, width, building);
+            }
+
         }
 
 
@@ -209,7 +258,7 @@ namespace RotWorld
 
 
         // 경계 안의 픽셀 사각형 채우기
-        private static void Fill(Color32[] pixels, int stride, int x, int y, int width, int height, Color32 color)
+        private static void Fill(NativeArray<Color32> pixels, int stride, int x, int y, int width, int height, Color32 color)
         {
             // 픽셀 배열 경계 안으로 제한한 사각형 영역 채우기
             for (int py = Mathf.Max(0, y); py < Mathf.Min(stride, y + height); py++)
@@ -222,8 +271,22 @@ namespace RotWorld
         }
 
 
+        // 소형 공용 아이콘의 관리 배열에 사각형 색상 기록
+        private static void Fill(Color32[] pixels, int stride, int x, int y, int width, int height, Color32 color)
+        {
+            // 지도 버퍼와 독립적인 소형 아이콘 생성 경로 유지
+            for (int py = Mathf.Max(0, y); py < Mathf.Min(stride, y + height); py++)
+            {
+                for (int px = Mathf.Max(0, x); px < Mathf.Min(stride, x + width); px++)
+                {
+                    pixels[py * stride + px] = color;
+                }
+            }
+        }
+
+
         // 용도별 지붕과 벽 및 출입구 표시
-        private static void DrawBuilding(Color32[] pixels, int stride, CityBuilding building)
+        private static void DrawBuilding(NativeArray<Color32> pixels, int stride, CityBuilding building)
         {
             // 건물 필지를 픽셀 좌표로 환산한 뒤 외형과 출입구 표시
             var r = building.Bounds;
@@ -330,6 +393,14 @@ namespace RotWorld
                 return;
             }
 
+            // 입력과 외부 카메라 상태가 같은 경우 배율 및 표시 재계산 생략
+            if (cameraMap == mapData && cameraCenter.Equals(viewCenter) && cameraZoom == zoom &&
+                cameraWidth == viewCamera.pixelWidth && cameraHeight == viewCamera.pixelHeight &&
+                cameraSize == viewCamera.orthographicSize && cameraPosition.Equals(viewCamera.transform.position))
+            {
+                return;
+            }
+
             int detailZoom = Mathf.Max(1, zoom - OverviewTransitionSteps + 1);
             float pixelsPerUnit = PixelsPerTile * detailZoom;
 
@@ -354,6 +425,13 @@ namespace RotWorld
             viewCamera.transform.position = new Vector3(
                 Mathf.Round(viewCenter.x * snapPixelsPerUnit) / snapPixelsPerUnit,
                 Mathf.Round(viewCenter.y * snapPixelsPerUnit) / snapPixelsPerUnit, CameraDepth);
+            cameraMap = mapData;
+            cameraCenter = viewCenter;
+            cameraZoom = zoom;
+            cameraWidth = viewCamera.pixelWidth;
+            cameraHeight = viewCamera.pixelHeight;
+            cameraSize = viewCamera.orthographicSize;
+            cameraPosition = viewCamera.transform.position;
         }
 
 

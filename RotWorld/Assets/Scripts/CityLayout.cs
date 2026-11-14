@@ -46,6 +46,10 @@ namespace RotWorld
         private readonly List<Vector2Int> roadNodes = new List<Vector2Int>();
         private readonly List<Vector2Int> bridgeBanks = new List<Vector2Int>();
 
+        // 도로 탐색 사이에 재사용하는 지도 크기 작업 배열
+        private int[] routeDistances;
+        private int[] routeParents;
+
         // 시드별 하천 굴곡과 계획 회전 보관
         private readonly double riverPhase;
         private readonly int planRotation;
@@ -81,7 +85,7 @@ namespace RotWorld
 
             // 필수 시설을 피하는 연결 도로 공간 확보
             mainRoadMask = BuildRoadMask(MainWidth);
-            localRoadMask = BuildRoadMask(LocalWidth);
+            localRoadMask = LocalWidth == MainWidth ? mainRoadMask : BuildRoadMask(LocalWidth);
             KeepConnectedRoadSpace();
             BuildNetwork();
             BuildLocalStreets();
@@ -802,8 +806,15 @@ namespace RotWorld
             var mask = width == MainWidth ? mainRoadMask : localRoadMask;
             int start = from.y * mapSize + from.x;
             int goal = to.y * mapSize + to.x;
-            var distance = new int[mapData.Tiles.Length];
-            var parents = new int[distance.Length];
+            // 지도 수명 안에서 도로별 배열 할당 반복 제거
+            if (routeDistances == null)
+            {
+                routeDistances = new int[mapData.Tiles.Length];
+                routeParents = new int[routeDistances.Length];
+            }
+
+            var distance = routeDistances;
+            var parents = routeParents;
             Array.Fill(distance, int.MaxValue);
             Array.Fill(parents, -1);
             var open = new SortedSet<(int Cost, int Index)>();
@@ -967,9 +978,17 @@ namespace RotWorld
                 }
             }
 
+            // 정렬 중 반복되는 삼각함수와 지역 중심 거리 계산 제거
+            var scores = new Dictionary<int, double>(candidates.Count);
+
+            foreach (int index in candidates)
+            {
+                scores[index] = RegionScore(index, region);
+            }
+
             candidates.Sort((a, b) =>
             {
-                int comparison = RegionScore(a, region).CompareTo(RegionScore(b, region));
+                int comparison = scores[a].CompareTo(scores[b]);
                 return comparison != 0 ? comparison : a.CompareTo(b);
             });
             return candidates;

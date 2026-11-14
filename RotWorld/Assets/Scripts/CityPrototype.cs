@@ -59,6 +59,8 @@ namespace RotWorld
         private TMP_Text dayLabel;
         private TMP_Text clockLabel;
         private long displayedGameSeconds = -1;
+        private long displayedDay = -1;
+        private readonly char[] clockCharacters = new char[8];
 
         // 하단 시간 제어의 배속 선택과 벡터 아이콘 보관
         private static readonly float[] SimulationSpeeds = { 1f, 0f, 2f, 4f, 8f };
@@ -157,14 +159,8 @@ namespace RotWorld
 
                 if (elapsedGameSeconds > 0d)
                 {
-                    foreach (var human in mapView.Map.HumanUnits.Values)
-                    {
-                        // 쓰러진 인간과 변환된 좀비의 생존 수치 갱신 제외
-                        if (human != null && human.IsHumanTarget)
-                        {
-                            human.Needs.Advance(elapsedGameSeconds);
-                        }
-                    }
+                    // 같은 생성 시점의 인간은 동일한 덧셈을 한 번만 수행
+                    mapView.Map.NeedsSchedule.Advance(elapsedGameSeconds);
                 }
 
                 RefreshClockDisplay();
@@ -489,8 +485,22 @@ namespace RotWorld
 
             // 자정에 증가한 일차와 하루 안의 시각을 UI에 함께 전달
             displayedGameSeconds = gameClock.ElapsedSeconds;
-            dayLabel.text = $"{gameClock.CurrentDay}일차";
-            clockLabel.text = $"{gameClock.Hour:00}:{gameClock.Minute:00}:{gameClock.Second:00}";
+            if (displayedDay != gameClock.CurrentDay)
+            {
+                displayedDay = gameClock.CurrentDay;
+                dayLabel.text = $"{displayedDay}일차";
+            }
+
+            // 매 프레임 문자열 할당 없이 동일한 두 자리 시간 형식 기록
+            clockCharacters[0] = (char)('0' + gameClock.Hour / 10);
+            clockCharacters[1] = (char)('0' + gameClock.Hour % 10);
+            clockCharacters[2] = ':';
+            clockCharacters[3] = (char)('0' + gameClock.Minute / 10);
+            clockCharacters[4] = (char)('0' + gameClock.Minute % 10);
+            clockCharacters[5] = ':';
+            clockCharacters[6] = (char)('0' + gameClock.Second / 10);
+            clockCharacters[7] = (char)('0' + gameClock.Second % 10);
+            clockLabel.SetCharArray(clockCharacters);
         }
 
 

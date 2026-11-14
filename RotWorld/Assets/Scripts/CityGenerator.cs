@@ -109,15 +109,166 @@ namespace RotWorld
         public int ZombieCount => Zombies.Count - InactiveZombies.Count;
         public event Action PopulationChanged;
 
+        // 생성 시점별 생존 시간 진행
+        internal HumanNeeds.Schedule NeedsSchedule { get; } = new HumanNeeds.Schedule();
+
         internal Dictionary<int, UnitWander> HumanUnits { get; } = new Dictionary<int, UnitWander>();
         internal Dictionary<int, float> HumanSpeeds { get; } = new Dictionary<int, float>();
         internal Dictionary<int, Vector2> HumanPositions { get; } = new Dictionary<int, Vector2>();
         internal Dictionary<int, Vector2> ZombiePositions { get; } = new Dictionary<int, Vector2>();
         internal Dictionary<int, Vector2Int> HumanDestinations { get; } = new Dictionary<int, Vector2Int>();
+        // 실제 좌표의 주변 충돌 후보 검색
+        internal UnitSpatialIndex HumanSpatialIndex { get; } = new UnitSpatialIndex();
+        internal UnitSpatialIndex ZombieSpatialIndex { get; } = new UnitSpatialIndex();
+
+        // 전투와 협동의 실제 행동 좌표 및 추적 관계 검색
+        internal UnitQueryIndex HumanQueries { get; }
+        internal UnitQueryIndex ZombieQueries { get; }
+        private readonly Dictionary<int, HashSet<int>> humanPursuers = new Dictionary<int, HashSet<int>>();
+        private readonly Dictionary<int, Dictionary<int, int>> zombieDependents = new Dictionary<int, Dictionary<int, int>>();
+
+        // 이동 예약 점유와 변환 공간 검색의 변경 상태
         internal HashSet<Vector2Int> OccupiedTiles { get; } = new HashSet<Vector2Int>();
+        internal GridChangeTracker OccupancyChanges { get; }
+        internal GridChangeTracker PositionChanges { get; }
+        internal long OccupancyRevision => OccupancyChanges.Version;
+        internal long PositionRevision => PositionChanges.Version;
+
         private readonly Dictionary<Vector2Int, int> occupancyCounts = new Dictionary<Vector2Int, int>();
+
+        // 고정 식별자를 유지하는 인구 타일 기록
         public List<Vector2Int> Humans { get; } = new List<Vector2Int>();
         public List<Vector2Int> Zombies { get; } = new List<Vector2Int>();
+
+        // 개체 등록과 기존 사전 순회 순위 갱신
+        internal void RegisterUnit(bool zombie, int index, UnitWander unit)
+        {
+            // 같은 인덱스의 등록도 원본 사전과 행동 검색에 함께 반영
+            (zombie ? ZombieUnits : HumanUnits)[index] = unit;
+            (zombie ? ZombieQueries : HumanQueries).InvalidateOrder();
+        }
+
+
+        // 제거 개체의 행동 검색과 사전 등록 정리
+        internal void RemoveUnit(bool zombie, int index)
+        {
+            // 이미 제거된 개체의 중복 순위 무효화 생략
+            var queries = zombie ? ZombieQueries : HumanQueries;
+            queries.Remove(index);
+
+            if (zombie)
+            {
+                zombieDependents.Remove(index);
+            }
+
+            if ((zombie ? ZombieUnits : HumanUnits).Remove(index))
+            {
+                queries.InvalidateOrder();
+            }
+        }
+
+
+        // 좀비의 기존 인간 추적 해제와 새 추적 관계 등록
+        internal void ChangePursuer(int zombieIndex, int previousHuman, int nextHuman)
+        {
+            // 빈 추적 집합은 지도 수명 동안 재사용
+            if (previousHuman >= 0 && humanPursuers.TryGetValue(previousHuman, out HashSet<int> previous))
+            {
+                previous.Remove(zombieIndex);
+            }
+
+            if (nextHuman < 0)
+            {
+                return;
+            }
+
+            if (!humanPursuers.TryGetValue(nextHuman, out HashSet<int> next))
+            {
+                next = new HashSet<int>();
+                humanPursuers.Add(nextHuman, next);
+            }
+
+            next.Add(zombieIndex);
+        }
+
+
+        // 특정 인간을 추적하는 좀비 인덱스 수집
+        internal void CollectPursuers(int humanIndex, List<int> results)
+        {
+            // 호출 중 상태 변경에 영향받지 않는 재사용 목록으로 전달
+            results.Clear();
+
+            if (humanPursuers.TryGetValue(humanIndex, out HashSet<int> pursuers))
+            {
+                foreach (int index in pursuers)
+                {
+                    if (ZombieUnits.ContainsKey(index))
+                    {
+                        results.Add(index);
+                    }
+                }
+            }
+        }
+
+
+        // 인간의 도주와 공격 및 협동 관계별 좀비 참조 수 변경
+        internal void ChangeZombieDependent(int humanIndex, int previousZombie, int nextZombie)
+        {
+            // 같은 대상 관계는 참조 수 유지
+            if (previousZombie == nextZombie)
+            {
+                return;
+            }
+
+            if (previousZombie >= 0 && zombieDependents.TryGetValue(previousZombie, out Dictionary<int, int> previous) &&
+                previous.TryGetValue(humanIndex, out int count))
+            {
+                if (count > 1)
+                {
+                    previous[humanIndex] = count - 1;
+                }
+                else
+                {
+                    previous.Remove(humanIndex);
+                }
+            }
+
+            if (nextZombie < 0)
+            {
+                return;
+            }
+
+            if (!zombieDependents.TryGetValue(nextZombie, out Dictionary<int, int> next))
+            {
+                next = new Dictionary<int, int>();
+                zombieDependents.Add(nextZombie, next);
+            }
+
+            next.TryGetValue(humanIndex, out int references);
+            next[humanIndex] = references + 1;
+        }
+
+
+        // 쓰러진 좀비와 관계된 인간만 기존 통지 순서로 수집
+        internal void CollectZombieDependents(int zombieIndex, List<int> results)
+        {
+            // 통지 중 관계 변경과 분리된 후보 스냅샷 구성
+            results.Clear();
+
+            if (zombieDependents.TryGetValue(zombieIndex, out Dictionary<int, int> dependents))
+            {
+                foreach (int index in dependents.Keys)
+                {
+                    if (HumanUnits.ContainsKey(index))
+                    {
+                        results.Add(index);
+                    }
+                }
+            }
+
+            HumanQueries.SortInOriginalOrder(results);
+        }
+
 
         // 여러 유닛의 현재 위치와 이동 예약을 참조 수로 누적
         internal void OccupyTile(Vector2Int tile)
@@ -125,7 +276,11 @@ namespace RotWorld
             // 연속 추격이 다른 유닛의 예약 타일을 지날 때 기존 예약 보존
             occupancyCounts.TryGetValue(tile, out int count);
             occupancyCounts[tile] = count + 1;
-            OccupiedTiles.Add(tile);
+
+            if (OccupiedTiles.Add(tile))
+            {
+                OccupancyChanges.Invalidate(tile);
+            }
         }
 
 
@@ -145,8 +300,56 @@ namespace RotWorld
             }
 
             occupancyCounts.Remove(tile);
-            OccupiedTiles.Remove(tile);
+
+            if (OccupiedTiles.Remove(tile))
+            {
+                OccupancyChanges.Invalidate(tile);
+            }
         }
+
+
+        // 공유 충돌 좌표와 해당 영역의 변경 번호 갱신
+        internal void PublishUnitPosition(bool zombie, int index, Vector2 position)
+        {
+            // 프레임 끝 공유 좌표의 기존 등록 시점 유지
+            var positions = zombie ? ZombiePositions : HumanPositions;
+
+            if (positions.TryGetValue(index, out Vector2 previous))
+            {
+                if (previous.Equals(position))
+                {
+                    return;
+                }
+
+                PositionChanges.Invalidate(Vector2Int.FloorToInt(previous));
+            }
+
+            positions[index] = position;
+            PositionChanges.Invalidate(Vector2Int.FloorToInt(position));
+        }
+
+
+        // 쓰러짐과 제거 시 기존 공유 좌표의 영역 무효화
+        internal void RemoveUnitPosition(bool zombie, int index)
+        {
+            // 제거 전 좌표에서 정확한 변경 영역 조회
+            var positions = zombie ? ZombiePositions : HumanPositions;
+
+            if (positions.TryGetValue(index, out Vector2 previous))
+            {
+                positions.Remove(index);
+                PositionChanges.Invalidate(Vector2Int.FloorToInt(previous));
+            }
+        }
+
+
+        // 충돌과 변환 공간 검사에 사용되는 공유 좌표 변경 통지
+        internal void NotifyPositionChanged()
+        {
+            // 프레임 안의 다른 개체 위치 변경도 즉시 캐시 무효화
+            PositionChanges.InvalidateAll();
+        }
+
 
         // 변환 후 인구 표시 갱신 통지
         internal void NotifyPopulationChanged()
@@ -165,6 +368,10 @@ namespace RotWorld
             Tiles = new byte[size * size];
             Terrain = new byte[size * size];
             Regions = new CityRegion[size * size];
+            OccupancyChanges = new GridChangeTracker(size);
+            PositionChanges = new GridChangeTracker(size);
+            HumanQueries = new UnitQueryIndex(HumanUnits);
+            ZombieQueries = new UnitQueryIndex(ZombieUnits);
         }
     }
 

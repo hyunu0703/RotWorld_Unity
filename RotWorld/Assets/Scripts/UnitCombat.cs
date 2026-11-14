@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace RotWorld
@@ -24,11 +25,15 @@ namespace RotWorld
         private bool isCooperativeSupport;
         private float CurrentHumanAttackInterval => isCooperativeSupport ? CooperativeAttackInterval : HumanAttackInterval;
 
+        // 일반 반격의 주변 후보 재사용
+        private readonly List<int> attackCandidates = new List<int>();
+
         // 소유 유닛과 공격 대상 및 표시 참조
         private UnitWander movement;
         private CityMap map;
         private UnitWalkAnimation animationView;
         private UnitWander victim;
+        private int victimZombieIndex = -1;
         private bool isZombie;
         private float attackTime;
         private float cooldown;
@@ -94,8 +99,27 @@ namespace RotWorld
             UnitWander target = null;
             float bestDistance = HumanAttackRange + DistanceTolerance;
 
-            foreach (var zombie in map.ZombieUnits.Values)
+            // 지정된 지원 공격 대상의 등록 상태와 기존 타격 조건 직접 확인
+            if (requiredTarget != null)
             {
+                if (!requiredTarget.IsZombieTarget ||
+                    !map.ZombieUnits.TryGetValue(requiredTarget.PopulationIndex, out UnitWander registered) || registered != requiredTarget ||
+                    Vector2.Distance(position, requiredTarget.Position) > bestDistance ||
+                    !UnitSight.HasLineOfSight(map, position, requiredTarget.Position))
+                {
+                    return false;
+                }
+
+                BeginAttack(requiredTarget, position, CurrentHumanAttackInterval, true);
+                movement.NotifyCooperativeStrikeStarted();
+                return true;
+            }
+
+            map.ZombieQueries.Collect(position, bestDistance + DistanceTolerance, attackCandidates, false);
+
+            foreach (int index in attackCandidates)
+            {
+                UnitWander zombie = map.ZombieUnits[index];
                 if (zombie == null || !zombie.IsZombieTarget || (requiredTarget != null && zombie != requiredTarget))
                 {
                     continue;
@@ -103,7 +127,9 @@ namespace RotWorld
 
                 float distance = Vector2.Distance(position, zombie.Position);
 
-                if (distance > bestDistance || !UnitSight.HasLineOfSight(map, position, zombie.Position))
+                if (distance > bestDistance || (target != null && distance == bestDistance &&
+                    map.ZombieQueries.Compare(index, target.PopulationIndex) < 0) ||
+                    !UnitSight.HasLineOfSight(map, position, zombie.Position))
                 {
                     continue;
                 }
@@ -148,7 +174,7 @@ namespace RotWorld
         private void BeginAttack(UnitWander target, Vector2 position, float interval, bool isCooperativeAttack = false)
         {
             // 좀비와 인간이 같은 준비 및 회복 연출을 공유하고 유형별 재공격 간격만 적용
-            victim = target;
+            SetVictim(target);
             this.isCooperativeAttack = isCooperativeAttack;
             attackDirection = (target.Position - position).normalized;
             attackTime = 0f;
@@ -244,9 +270,25 @@ namespace RotWorld
                 isAttacking = false;
                 pursuitDelayRemaining = isZombie ? PursuitResumeDelay : 0f;
                 ReleaseVictimGrab();
-                victim = null;
+                SetVictim(null);
                 animationView.SetAttackOffset(Vector2.zero);
             }
+        }
+
+
+        // 공격 대상 변경과 대상 좀비의 관계 참조 수 갱신
+        private void SetVictim(UnitWander next)
+        {
+            // 공격자의 유형과 무관한 기존 대상 참조 갱신
+            int nextIndex = !isZombie && next != null ? next.PopulationIndex : -1;
+
+            if (map != null && movement != null)
+            {
+                map.ChangeZombieDependent(movement.PopulationIndex, victimZombieIndex, nextIndex);
+            }
+
+            victimZombieIndex = nextIndex;
+            victim = next;
         }
 
 
@@ -293,7 +335,7 @@ namespace RotWorld
         {
             // 붙잡힌 인간과 공격 오프셋을 즉시 복원하고 재공격 대기는 유지
             ReleaseVictimGrab();
-            victim = null;
+            SetVictim(null);
             isAttacking = false;
             hasHit = false;
             isCooperativeAttack = false;
@@ -329,7 +371,7 @@ namespace RotWorld
         {
             // 공격자 비활성화나 파괴 시에도 붙잡힌 인간 즉시 해제
             ReleaseVictimGrab();
-            victim = null;
+            SetVictim(null);
             pursuitDelayRemaining = 0f;
 
             // 중단된 공격의 시각 오프셋과 색상 제거

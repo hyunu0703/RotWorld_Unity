@@ -13,6 +13,16 @@ namespace RotWorld
         private const int Width = Radius * 2 + 1;
         private const float DiagonalDistance = 1.41421356f;
 
+        // 메인 스레드의 순차 탐색에서 재사용하는 작업 메모리
+        private static readonly float[] LocalCosts = new float[Width * Width];
+        private static readonly int[] LocalParents = new int[Width * Width];
+        private static readonly SearchQueue<(float Cost, int Index)> LocalFrontier = new SearchQueue<(float Cost, int Index)>();
+        private static readonly Dictionary<Vector2Int, float> TargetCosts = new Dictionary<Vector2Int, float>();
+        private static readonly Dictionary<Vector2Int, Vector2Int> TargetParents = new Dictionary<Vector2Int, Vector2Int>();
+        private static readonly SearchQueue<(float Estimate, float Remaining, float Cost, int Index)> TargetFrontier =
+            new SearchQueue<(float Estimate, float Remaining, float Cost, int Index)>();
+        private static readonly List<Vector2> ThreatDirections = new List<Vector2>();
+
         // 보행 가능 타일 여부 조회
         public static bool CanOccupy(CityMap map, Vector2Int tile)
         {
@@ -81,6 +91,15 @@ namespace RotWorld
         // 실제 구간 이동 시간을 비용으로 사용하는 추적 전용 A스타 경로 탐색
         public static void FindTargetPath(CityMap map, Vector2Int start, Vector2Int target, List<Vector2Int> path, bool approachOccupiedTarget = false)
         {
+            // 공개 경로 요청은 기존 탐색 정책 유지
+            FindTargetPathCore(map, start, target, path, approachOccupiedTarget, null);
+        }
+
+
+        // 실제 탐색에서 확인한 모든 점유 영역을 기록하는 공통 경로 계산
+        private static void FindTargetPathCore(CityMap map, Vector2Int start, Vector2Int target, List<Vector2Int> path,
+            bool approachOccupiedTarget, GridChangeTracker.Watch watch)
+        {
             // 지도 전체에서 탐색해 배회 반경으로 인한 우회 경로 누락 방지
             path.Clear();
 
@@ -89,9 +108,14 @@ namespace RotWorld
                 return;
             }
 
-            var costs = new Dictionary<Vector2Int, float> { [start] = 0f };
-            var parents = new Dictionary<Vector2Int, Vector2Int>();
-            var frontier = new SortedSet<(float Estimate, float Remaining, float Cost, int Index)>();
+            // 기존 탐색 순서와 동점 비교를 유지한 작업 메모리 초기화
+            var costs = TargetCosts;
+            var parents = TargetParents;
+            var frontier = TargetFrontier;
+            costs.Clear();
+            parents.Clear();
+            frontier.Clear();
+            costs[start] = 0f;
             float initialEstimate = approachOccupiedTarget ? 0f : EstimateTime(start, target);
             frontier.Add((initialEstimate, initialEstimate, 0f, start.y * map.Size + start.x));
 
@@ -131,15 +155,15 @@ namespace RotWorld
 
                         // 실제 이동 예약과 동일한 점유 및 대각선 모서리 검사
                         if ((dx == 0 && dy == 0) || !CanOccupy(map, next) ||
-                            ((approachOccupiedTarget || next != target) && map.OccupiedTiles.Contains(next)))
+                            ((approachOccupiedTarget || next != target) && IsOccupied(map, next, watch)))
                         {
                             continue;
                         }
 
                         if (isDiagonal && (!CanOccupy(map, tile + new Vector2Int(dx, 0)) ||
                             !CanOccupy(map, tile + new Vector2Int(0, dy)) ||
-                            map.OccupiedTiles.Contains(tile + new Vector2Int(dx, 0)) ||
-                            map.OccupiedTiles.Contains(tile + new Vector2Int(0, dy))))
+                            IsOccupied(map, tile + new Vector2Int(dx, 0), watch) ||
+                            IsOccupied(map, tile + new Vector2Int(0, dy), watch)))
                         {
                             continue;
                         }
@@ -160,6 +184,19 @@ namespace RotWorld
                     }
                 }
             }
+        }
+
+
+        // 점유 조회와 해당 탐색 분기의 영역 의존성 기록
+        private static bool IsOccupied(CityMap map, Vector2Int tile, GridChangeTracker.Watch watch)
+        {
+            // 막힌 후보와 대각선 모서리도 재탐색 무효화 범위에 포함
+            if (watch != null)
+            {
+                watch.Record(tile);
+            }
+
+            return map.OccupiedTiles.Contains(tile);
         }
 
 
@@ -191,15 +228,24 @@ namespace RotWorld
             float bestAlignment = float.PositiveInfinity;
             Vector2 bestDirection = away;
 
+            // 후보 방향에 무관한 위협 벡터의 정규화 결과 재사용
+            Vector2 primaryDirection = (threat - start).normalized;
+            ThreatDirections.Clear();
+
+            for (int j = 0; j < threats.Count; j++)
+            {
+                ThreatDirections.Add((threats[j] - start).normalized);
+            }
+
             for (int i = 0; i < DirectionCount; i++)
             {
                 float angle = baseAngle + i * (Mathf.PI * 2f / DirectionCount);
                 var direction = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
-                float alignment = Vector2.Dot(direction, (threat - start).normalized);
+                float alignment = Vector2.Dot(direction, primaryDirection);
 
                 for (int j = 0; j < threats.Count; j++)
                 {
-                    alignment = Mathf.Max(alignment, Vector2.Dot(direction, (threats[j] - start).normalized));
+                    alignment = Mathf.Max(alignment, Vector2.Dot(direction, ThreatDirections[j]));
                 }
 
                 if (alignment < bestAlignment)
@@ -238,9 +284,10 @@ namespace RotWorld
         {
             // 제한된 지역 배열과 비용 우선 탐색 큐 준비
             path.Clear();
-            var costs = new float[Width * Width];
-            var parents = new int[costs.Length];
-            var frontier = new SortedSet<(float Cost, int Index)>();
+            var costs = LocalCosts;
+            var parents = LocalParents;
+            var frontier = LocalFrontier;
+            frontier.Clear();
             int center = Radius * Width + Radius;
 
             for (int i = 0; i < costs.Length; i++)
@@ -263,8 +310,11 @@ namespace RotWorld
                 frontier.Remove(node);
                 var tile = start + new Vector2Int(node.Index % Width - Radius, node.Index / Width - Radius);
 
+                // 동일 타일의 위협 거리를 종료 및 점수와 인접 구간 검사에서 공유
+                float tileThreatDistance = threat.HasValue ? NearestThreatDistance(tile, tile, threat.Value, threats) : 0f;
+
                 // 안전 거리에 도달하는 최저 비용 타일에서 도주 구간 종료
-                if (threat.HasValue && NearestThreatDistance(tile, tile, threat.Value, threats) >= UnitSight.FleeReleaseRadius)
+                if (threat.HasValue && tileThreatDistance >= UnitSight.FleeReleaseRadius)
                 {
                     destination = node.Index;
                     break;
@@ -295,7 +345,7 @@ namespace RotWorld
                     const float CostPenalty = .2f;
                     Vector2 displacement = (Vector2)(tile - start);
                     float score = Vector2.Dot(displacement, escapeDirection) +
-                        (NearestThreatDistance(tile, tile, threat.Value, threats) - initialThreatDistance) * DistanceWeight - node.Cost * CostPenalty;
+                        (tileThreatDistance - initialThreatDistance) * DistanceWeight - node.Cost * CostPenalty;
 
                     if (node.Index != center && score > bestEscapeScore)
                     {
@@ -333,7 +383,7 @@ namespace RotWorld
                             float clearance = NearestThreatDistance(tile, next, threat.Value, threats);
 
                             if (clearance < MinimumThreatClearance &&
-                                clearance < NearestThreatDistance(tile, tile, threat.Value, threats))
+                                clearance < tileThreatDistance)
                             {
                                 continue;
                             }
@@ -377,6 +427,164 @@ namespace RotWorld
             }
 
             path.Reverse();
+        }
+
+
+        /// <summary>
+        /// 고정 지형 지도에서 출발과 목표 및 점유가 같은 추적 경로 재사용
+        /// </summary>
+        internal sealed class TargetPathCache
+        {
+            // 지도 생성 후 고정된 지형과 마지막 요청의 정확한 입력 보관
+            private CityMap cachedMap;
+            private Vector2Int cachedStart;
+            private Vector2Int cachedTarget;
+            private readonly GridChangeTracker.Watch occupancyWatch = new GridChangeTracker.Watch();
+            private readonly List<Vector2Int> cachedPath = new List<Vector2Int>();
+
+            // 동일 입력의 성공 및 실패 경로를 호출자 목록에 전달
+            internal void Find(CityMap map, Vector2Int start, Vector2Int target, List<Vector2Int> path)
+            {
+                // 이동과 예약으로 점유가 달라지면 같은 프레임에도 즉시 재계산
+                if (cachedMap != map || cachedStart != start || cachedTarget != target ||
+                    !occupancyWatch.TryRefresh(map.OccupancyChanges))
+                {
+                    occupancyWatch.Reset(map.OccupancyChanges);
+                    FindTargetPathCore(map, start, target, cachedPath, false, occupancyWatch);
+                    cachedMap = map;
+                    cachedStart = start;
+                    cachedTarget = target;
+
+                }
+
+                path.Clear();
+                path.AddRange(cachedPath);
+            }
+        }
+
+
+        /// <summary>
+        /// 기존 정렬 집합의 고유 값과 비교 순서를 유지하는 재사용 최소 힙
+        /// </summary>
+        private sealed class SearchQueue<T> where T : System.IComparable<T>
+        {
+            // 힙 항목과 값별 위치 보관
+            private readonly List<T> items = new List<T>();
+            private readonly Dictionary<T, int> indices = new Dictionary<T, int>();
+            internal int Count => items.Count;
+            internal T Min => items[0];
+
+            // 이전 탐색의 항목 제거 및 용량 유지
+            internal void Clear()
+            {
+                // 참조와 위치를 함께 초기화
+                items.Clear();
+                indices.Clear();
+            }
+
+
+            // 중복 없는 항목 추가와 최소 힙 순서 복원
+            internal void Add(T item)
+            {
+                // 정렬 집합과 동일한 중복 항목 제외
+                if (indices.ContainsKey(item))
+                {
+                    return;
+                }
+
+                int index = items.Count;
+                items.Add(item);
+                indices[item] = index;
+                MoveUp(index);
+            }
+
+
+            // 지정 항목 제거 후 교체 항목의 힙 순서 복원
+            internal void Remove(T item)
+            {
+                // 갱신 전 비용이 큐에 없는 경우 기존 삭제 동작 유지
+                if (!indices.TryGetValue(item, out int index))
+                {
+                    return;
+                }
+
+                int last = items.Count - 1;
+                T replacement = items[last];
+                items.RemoveAt(last);
+                indices.Remove(item);
+
+                if (index == last)
+                {
+                    return;
+                }
+
+                items[index] = replacement;
+                indices[replacement] = index;
+
+                if (index > 0 && replacement.CompareTo(items[(index - 1) / 2]) < 0)
+                {
+                    MoveUp(index);
+                }
+                else
+                {
+                    MoveDown(index);
+                }
+            }
+
+
+            // 부모보다 작은 항목의 상향 이동
+            private void MoveUp(int index)
+            {
+                // 튜플 기본 비교로 기존 비용 및 타일 동점 순서 유지
+                while (index > 0)
+                {
+                    int parent = (index - 1) / 2;
+
+                    if (items[index].CompareTo(items[parent]) >= 0)
+                    {
+                        break;
+                    }
+
+                    Swap(index, parent);
+                    index = parent;
+                }
+            }
+
+
+            // 자식보다 큰 항목의 하향 이동
+            private void MoveDown(int index)
+            {
+                // 두 자식 중 작은 항목과 교환
+                while (index * 2 + 1 < items.Count)
+                {
+                    int child = index * 2 + 1;
+
+                    if (child + 1 < items.Count && items[child + 1].CompareTo(items[child]) < 0)
+                    {
+                        child++;
+                    }
+
+                    if (items[index].CompareTo(items[child]) <= 0)
+                    {
+                        break;
+                    }
+
+                    Swap(index, child);
+                    index = child;
+                }
+            }
+
+
+            // 두 항목과 역방향 위치 정보 교환
+            private void Swap(int first, int second)
+            {
+                // 힙과 삭제용 위치 정보를 동일 순서로 동기화
+                T item = items[first];
+                items[first] = items[second];
+                items[second] = item;
+                indices[items[first]] = first;
+                indices[items[second]] = second;
+            }
         }
     }
 }

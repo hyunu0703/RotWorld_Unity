@@ -18,6 +18,15 @@ namespace RotWorld
         private CityMap map;
         private float fallAngle;
 
+        // 최종 표시 계산의 입력과 적용 상태 보관
+        private bool hasAppliedPosition;
+        private Vector2 appliedOrigin;
+        private float appliedFallAngle;
+        private bool appliedFlip;
+        private Vector2 appliedAttackOffset;
+        private float appliedKnockbackHeight;
+        private CityMap appliedMap;
+
         // 공용 프레임과 개체 렌더러 및 누적 이동 거리
         private SpriteRenderer visual;
         private int humanSortingOrder;
@@ -177,7 +186,12 @@ namespace RotWorld
         {
             // 공용 텍스처 대신 개체 렌더러 색상만 변경하고 인간과 좀비에 동일 적용
             isHitVisible = hit;
-            visual.color = isHitVisible ? HitColor : Color.white;
+            Color nextColor = isHitVisible ? HitColor : Color.white;
+
+            if (visual.color != nextColor)
+            {
+                visual.color = nextColor;
+            }
         }
 
 
@@ -207,20 +221,9 @@ namespace RotWorld
                 return;
             }
 
-            // 좌우 반전과 쓰러짐 회전 및 건물 보정이 반영된 표시 변환으로 시작 좌표 계산
-            var startPositions = new Vector3[deathVisuals.DustPoints.Length];
-
-            for (int i = 0; i < startPositions.Length; i++)
-            {
-                Vector2 point = deathVisuals.DustPoints[i];
-                point.x = visual.flipX ? -point.x : point.x;
-                startPositions[i] = visual.transform.TransformPoint(point);
-            }
-
-            // 유닛 파괴 후에도 연출이 남도록 같은 부모 아래 독립 개체로 생성
-            var dust = new GameObject("Zombie Dust");
-            dust.transform.SetParent(transform.parent, false);
-            dust.AddComponent<UnitDustEffect>().Play(deathVisuals.PixelSprite, startPositions, deathVisuals.PixelSize, visual.sortingOrder);
+            // 같은 지도 부모의 완료 연출과 시작 좌표 배열 재사용
+            UnitDustEffect dust = UnitDustEffect.Acquire(transform.parent);
+            dust.PlayFromVisual(deathVisuals, visual);
         }
 
 
@@ -256,6 +259,24 @@ namespace RotWorld
         // 방향 반전과 중심 회전 및 건물 밖 모션 오프셋 합성
         private void ApplyVisualPosition()
         {
+            // 마지막 적용 이후 입력이 같은 경우 건물과 모서리 재계산 생략
+            Vector2 origin = transform.localPosition;
+
+            if (hasAppliedPosition && appliedOrigin.Equals(origin) && appliedFallAngle == fallAngle &&
+                appliedFlip == visual.flipX && appliedAttackOffset.Equals(attackOffset) &&
+                appliedKnockbackHeight == knockbackHeight && appliedMap == map)
+            {
+                return;
+            }
+
+            hasAppliedPosition = true;
+            appliedOrigin = origin;
+            appliedFallAngle = fallAngle;
+            appliedFlip = visual.flipX;
+            appliedAttackOffset = attackOffset;
+            appliedKnockbackHeight = knockbackHeight;
+            appliedMap = map;
+
             // 좌우 반전 후 몸체 중심을 유지하는 회전과 도약 오프셋 구성
             Quaternion rotation = Quaternion.Euler(0f, 0f, fallAngle);
             Vector2 center = BodyBounds.center;
@@ -277,7 +298,6 @@ namespace RotWorld
                 max = Vector2.Max(max, point);
             }
 
-            Vector2 origin = transform.localPosition;
             var bounds = Rect.MinMaxRect(origin.x + min.x, origin.y + min.y, origin.x + max.x, origin.y + max.y);
 
             if (map != null && !UnitPathfinder.HasBuildingClearance(map, bounds))
