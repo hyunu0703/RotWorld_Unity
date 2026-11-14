@@ -449,6 +449,55 @@ namespace RotWorld
         }
 
 
+        // 지도와 인간 사이의 선택 표시 렌더링 순서 설정
+        internal void SetSelectionCanvasSorting(Canvas selectionCanvas)
+        {
+            // 지도 렌더러의 레이어를 공유하고 인간보다 한 단계 아래에 배치
+            selectionCanvas.sortingLayerID = spriteRenderer.sortingLayerID;
+            selectionCanvas.sortingOrder = spriteRenderer.sortingOrder + UnitWalkAnimation.LivingSortingOffset - 1;
+        }
+
+
+        // 화면 클릭 영역에서 가장 가까운 살아 있는 인간 조회
+        internal UnitWander GetHumanAtScreenPosition(Vector2 screenPosition)
+        {
+            // 생성창과 카메라 외부 클릭의 선택 차단
+            if (mapData == null || viewCamera == null || IsInputBlocked || !viewCamera.pixelRect.Contains(screenPosition))
+            {
+                return null;
+            }
+
+            // 기존 몸체 영역과 화면상 최소 클릭 여유를 조합해 작은 유닛 선택 지원
+            const float MinimumClickSize = 12f;
+            UnitWander closest = null;
+            float closestDistance = float.PositiveInfinity;
+
+            foreach (var human in mapData.HumanUnits.Values)
+            {
+                if (human == null || !human.isActiveAndEnabled || !human.IsHumanTarget)
+                {
+                    continue;
+                }
+
+                Rect body = UnitWalkAnimation.BodyBounds;
+                Vector2 min = viewCamera.WorldToScreenPoint(human.transform.TransformPoint(body.min));
+                Vector2 max = viewCamera.WorldToScreenPoint(human.transform.TransformPoint(body.max));
+                Vector2 center = (min + max) * .5f;
+                Vector2 size = Vector2.Max(max - min, Vector2.one * MinimumClickSize);
+                var hitRect = new Rect(center - size * .5f, size);
+                float distance = (screenPosition - center).sqrMagnitude;
+
+                if (hitRect.Contains(screenPosition) && distance < closestDistance)
+                {
+                    closest = human;
+                    closestDistance = distance;
+                }
+            }
+
+            return closest;
+        }
+
+
         // 화면 클릭 좌표를 지도 타일로 변환해 데이터와 유닛 표시 추가
         public bool TrySummon(Vector2 screenPosition, bool zombie)
         {

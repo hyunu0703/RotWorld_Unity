@@ -106,6 +106,9 @@ namespace RotWorld
         private const float SummonOutlineWidth = 3f;
         private static readonly Color SummonOutlineColor = new Color32(255, 217, 92, 255);
 
+        // 선택한 인간의 생존 수치와 화면 위치 표시
+        private HumanNeedsPanel humanNeedsPanel;
+
         // 생성 설정 입력과 중복 실행 제어
         private TMP_InputField seedInput;
         private TMP_InputField humansInput;
@@ -185,9 +188,15 @@ namespace RotWorld
         }
 
 
-        // UI 이벤트 처리 이후 커서 위치 갱신과 지도 클릭 소환
+        // UI 이벤트 처리 이후 인간 정보 표시와 커서 위치 갱신 및 지도 클릭 소환
         private void LateUpdate()
         {
+            // 소환 선택 중 클릭 충돌 방지와 선택된 인간의 이동 추적
+            if (humanNeedsPanel != null)
+            {
+                humanNeedsPanel.Refresh(summonSelection == SummonSelection.None);
+            }
+
             // 비활성 선택과 입력 차단 상태에서 커서 숨김
             if (summonCursor == null)
             {
@@ -623,6 +632,8 @@ namespace RotWorld
             welcomeRect.anchorMin = welcomeRect.anchorMax = new Vector2(.5f, .5f);
             welcomeRect.pivot = new Vector2(.5f, .5f);
             welcomeLabel.alignment = TextAlignmentOptions.Center;
+            BuildHumanNeedsPanel(canvasRect);
+
             // 생성 설정 입력과 상태 안내 및 실행 버튼 구성
             var dialog = Rect("Map Generation", canvasRect, new Vector2(1, 0), new Vector2(1, 0), new Vector2(-18, 78), new Vector2(466, 526));
             generationDialog = dialog.gameObject;
@@ -646,6 +657,40 @@ namespace RotWorld
             summonCursor = cursorRect.gameObject.AddComponent<Image>();
             summonCursor.raycastTarget = false;
             summonCursor.gameObject.SetActive(false);
+        }
+
+
+        // 기존 폰트와 색상을 사용하는 인간 정보 패널 구성
+        private void BuildHumanNeedsPanel(RectTransform canvasRect)
+        {
+            // 지도 위와 인간 아래에 렌더링할 선택 표시 전용 월드 캔버스 구성
+            const float PanelWidth = 220f;
+            const float PanelHeight = 116f;
+            var markerCanvasRect = Rect("Unit Selection Canvas", transform, new Vector2(.5f, .5f), new Vector2(.5f, .5f),
+                Vector2.zero, Vector2.one);
+            var markerCanvas = markerCanvasRect.gameObject.AddComponent<Canvas>();
+            markerCanvas.renderMode = RenderMode.WorldSpace;
+            markerCanvas.worldCamera = worldCamera;
+            markerCanvas.overrideSorting = true;
+            mapView.SetSelectionCanvasSorting(markerCanvas);
+            var selectionMarker = Rect("Human Selection", markerCanvasRect, new Vector2(.5f, .5f), new Vector2(.5f, .5f),
+                Vector2.zero, new Vector2(16f, 8f));
+            var marker = selectionMarker.gameObject.AddComponent<SelectionEllipseGraphic>();
+            marker.color = new Color32(110, 235, 140, 255);
+            marker.raycastTarget = false;
+            selectionMarker.gameObject.SetActive(false);
+
+            // 생존 정보 패널은 기존 화면 캔버스에서 표시
+            var panel = Rect("Human Needs", canvasRect, new Vector2(.5f, .5f), new Vector2(0f, 1f),
+                Vector2.zero, new Vector2(PanelWidth, PanelHeight));
+            Background(panel, PanelColor);
+            Label(panel, "인간", new Vector2(16f, -10f), new Vector2(188f, 26f), 20f);
+            var hungerLabel = Label(panel, "허기", new Vector2(16f, -44f), new Vector2(188f, 26f));
+            var thirstLabel = Label(panel, "갈증", new Vector2(16f, -76f), new Vector2(188f, 26f));
+
+            // 클릭과 위치 갱신은 독립 표시 객체에 위임
+            humanNeedsPanel = new HumanNeedsPanel(mapView, worldCamera, canvasRect, panel, hungerLabel, thirstLabel, selectionMarker);
+            panel.gameObject.SetActive(false);
         }
 
 
