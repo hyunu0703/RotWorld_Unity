@@ -14,6 +14,7 @@ namespace RotWorld
         private const int SecondsPerDay = 24 * SecondsPerHour;
         private double elapsedGameSeconds;
 
+        public double TotalElapsedSeconds => elapsedGameSeconds;
         public long ElapsedSeconds => (long)Math.Floor(elapsedGameSeconds);
         public long CurrentDay => ElapsedSeconds / SecondsPerDay + 1;
         public int Hour => (int)(ElapsedSeconds % SecondsPerDay / SecondsPerHour);

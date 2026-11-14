@@ -145,10 +145,25 @@ namespace RotWorld
         // 게임 시계 진행과 Q키 입력에 따른 하단 도구 모음 표시 전환
         private void Update()
         {
-            // 지도 생성 이후 공통 배속이 적용된 시간을 시계와 상단 표시에 전달
+            // 지도 생성 이후 공통 배속이 적용된 시간을 시계와 인간 생존 수치에 전달
             if (mapView != null && mapView.Map != null)
             {
+                double previousGameSeconds = gameClock.TotalElapsedSeconds;
                 gameClock.Advance(Time.deltaTime);
+                double elapsedGameSeconds = gameClock.TotalElapsedSeconds - previousGameSeconds;
+
+                if (elapsedGameSeconds > 0d)
+                {
+                    foreach (var human in mapView.Map.HumanUnits.Values)
+                    {
+                        // 쓰러진 인간과 변환된 좀비의 생존 수치 갱신 제외
+                        if (human != null && human.IsHumanTarget)
+                        {
+                            human.Needs.Advance(elapsedGameSeconds);
+                        }
+                    }
+                }
+
                 RefreshClockDisplay();
             }
 

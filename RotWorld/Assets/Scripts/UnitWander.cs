@@ -17,6 +17,9 @@ namespace RotWorld
         private const float MinimumRest = 1f;
         private const float MaximumRest = 6f;
 
+        // 인간 개인의 허기와 갈증 상태 및 외부 읽기 접근
+        public HumanNeeds Needs { get; private set; }
+
         // 지도 인구와 연속 지면 위치 및 이동 경로 보관
         private CityMap map;
         private List<Vector2Int> population;
@@ -150,6 +153,7 @@ namespace RotWorld
 
             this.map = map;
             isZombie = zombie;
+            Needs = zombie ? null : new HumanNeeds();
             walkAnimation.SetMap(map);
             walkAnimation.SetUnitType(zombie);
             this.zombieFrames = zombieFrames;
@@ -1730,6 +1734,7 @@ namespace RotWorld
             population.Add(currentTile);
             map.ZombieUnits[populationIndex] = this;
             isZombie = true;
+            Needs = null;
             isDowned = false;
             hasBeenHit = false;
             hitCount = 0;
