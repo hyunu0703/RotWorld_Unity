@@ -8,8 +8,9 @@ namespace RotWorld
     /// </summary>
     public sealed class HumanNeeds
     {
-        // 기존 허기와 갈증의 고갈 기준
-        public const double MaximumValue = 100d;
+        // 생성 시 초기 수치와 아이템 회복 상한 및 기존 고갈 기준
+        public const double InitialValue = 100d;
+        public const double MaximumValue = 150d;
         private const double SecondsPerDay = 24d * 60d * 60d;
         private const double HungerDuration = 7d * SecondsPerDay;
         private const double ThirstDuration = 3d * SecondsPerDay;
@@ -17,8 +18,8 @@ namespace RotWorld
         // 개인이 참조하는 시간 상태와 지도 소유 진행 목록
         private Timeline timeline;
         private Schedule schedule;
-        public double Hunger => MaximumValue * Math.Max(0d, 1d - timeline.Elapsed / HungerDuration);
-        public double Thirst => MaximumValue * Math.Max(0d, 1d - timeline.Elapsed / ThirstDuration);
+        public double Hunger => InitialValue * Math.Max(0d, 1d - timeline.Elapsed / HungerDuration);
+        public double Thirst => InitialValue * Math.Max(0d, 1d - timeline.ThirstElapsed / ThirstDuration);
 
         // 독립 생존 수치 생성
         public HumanNeeds()
@@ -57,6 +58,33 @@ namespace RotWorld
         }
 
 
+        // 아이템 회복량을 개인 생존 수치에 즉시 적용
+        public bool UseItem(ItemDefinition item)
+        {
+            // 아이템 정보 누락과 회복 가능한 수치 확인
+            if (item == null)
+            {
+                throw new ArgumentNullException(nameof(item));
+            }
+
+            if ((item.HungerRecovery <= 0 || Hunger >= MaximumValue) &&
+                (item.ThirstRecovery <= 0 || Thirst >= MaximumValue))
+            {
+                return false;
+            }
+
+            // 같은 시간 상태를 공유하는 다른 인간의 수치 보호
+            if (schedule != null)
+            {
+                timeline = schedule.Split(timeline);
+            }
+
+            // 개인 상태에 즉시 회복 적용 후 사용 성공 전달
+            timeline.Restore(item.HungerRecovery, item.ThirstRecovery);
+            return true;
+        }
+
+
         // 쓰러짐 또는 제거 시 해당 개인의 생존 수치 고정
         internal void Freeze()
         {
@@ -67,7 +95,7 @@ namespace RotWorld
             }
 
             timeline.RemoveMember();
-            timeline = new Timeline(timeline.Elapsed);
+            timeline = new Timeline(timeline.Elapsed, thirstElapsed: timeline.ThirstElapsed);
             schedule = null;
         }
 
@@ -88,12 +116,14 @@ namespace RotWorld
             // 개인 수와 기존 덧셈 순서로 누적한 게임 시간
             internal int Members { get; private set; }
             internal double Elapsed { get; private set; }
+            internal double ThirstElapsed { get; private set; }
 
             // 독립 또는 공유 상태의 시작 시간 구성
-            internal Timeline(double elapsed, int members = 1)
+            internal Timeline(double elapsed, int members = 1, double? thirstElapsed = null)
             {
                 // 분리 시 재계산 없이 기존 비트 수준 누적값 복사
                 Elapsed = elapsed;
+                ThirstElapsed = thirstElapsed ?? Math.Min(ThirstDuration, elapsed);
                 Members = members;
             }
 
@@ -119,6 +149,19 @@ namespace RotWorld
             {
                 // 개인별 반복과 동일한 덧셈 및 고갈 이후 상한 적용
                 Elapsed = Math.Min(HungerDuration, Elapsed + seconds);
+                ThirstElapsed = Math.Min(ThirstDuration, ThirstElapsed + seconds);
+            }
+
+
+            // 아이템 회복량을 고갈 시간으로 환산해 차감
+            internal void Restore(int hungerRecovery, int thirstRecovery)
+            {
+                // 초기값 초과분을 음수 시간으로 보관하고 회복 상한에서 제한
+                double minimumRatio = 1d - MaximumValue / InitialValue;
+                Elapsed = Math.Max(minimumRatio * HungerDuration,
+                    Elapsed - Math.Max(0, hungerRecovery) / InitialValue * HungerDuration);
+                ThirstElapsed = Math.Max(minimumRatio * ThirstDuration,
+                    ThirstElapsed - Math.Max(0, thirstRecovery) / InitialValue * ThirstDuration);
             }
         }
 
@@ -151,7 +194,7 @@ namespace RotWorld
             {
                 // 이전 묶음과 동일한 누적값으로 다음 프레임 진행 유지
                 previous.RemoveMember();
-                var timeline = new Timeline(previous.Elapsed);
+                var timeline = new Timeline(previous.Elapsed, thirstElapsed: previous.ThirstElapsed);
                 timelines.Add(timeline);
                 return timeline;
             }
@@ -178,7 +221,8 @@ namespace RotWorld
                     }
 
                     // 대상이 없거나 모든 수치가 고갈된 묶음의 반복 연산 제거
-                    if (timeline.Members == 0 || timeline.Elapsed >= HungerDuration)
+                    if (timeline.Members == 0 ||
+                        (timeline.Elapsed >= HungerDuration && timeline.ThirstElapsed >= ThirstDuration))
                     {
                         timelines.RemoveAt(i);
                     }
