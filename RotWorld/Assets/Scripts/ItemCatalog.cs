@@ -4,10 +4,13 @@ using System.Collections.Generic;
 namespace RotWorld
 {
     /// <summary>
-    /// 음식 및 음료 6종의 고정 정보 제공
+    /// 음식 및 음료 6종과 가방의 고정 정보 제공
     /// </summary>
     public static class ItemCatalog
     {
+        // 착용 시 인벤토리 10칸을 확장하는 가방 정의
+        public static ItemDefinition Bag { get; } = new ItemDefinition("bag", "가방", ItemCategory.Equipment, 0, 0, 10);
+
         // 합의된 아이템별 이름과 분류 및 회복량
         public static IReadOnlyList<ItemDefinition> All { get; } = Array.AsReadOnly(new[]
         {
@@ -16,7 +19,8 @@ namespace RotWorld
             new ItemDefinition("canned_food", "식품 통조림", ItemCategory.Food, 35, 0),
             new ItemDefinition("combat_ration", "전투식량", ItemCategory.Food, 50, 0),
             new ItemDefinition("water", "생수", ItemCategory.Drink, 0, 40),
-            new ItemDefinition("fruit_juice", "과일 주스", ItemCategory.Drink, 10, 25)
+            new ItemDefinition("fruit_juice", "과일 주스", ItemCategory.Drink, 10, 25),
+            Bag
         });
     }
 }

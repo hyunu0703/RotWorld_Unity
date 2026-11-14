@@ -20,6 +20,9 @@ namespace RotWorld
         // 인간 개인의 허기와 갈증 상태 및 외부 읽기 접근
         public HumanNeeds Needs { get; private set; }
 
+        // 인간 개인의 소지품과 가방 착용 상태
+        public HumanInventory Inventory { get; private set; }
+
         // 지도 인구와 연속 지면 위치 및 이동 경로 보관
         private CityMap map;
         private List<Vector2Int> population;
@@ -167,6 +170,8 @@ namespace RotWorld
             this.map = map;
             isZombie = zombie;
             Needs = zombie ? null : map.NeedsSchedule.Create();
+            Inventory = zombie ? null : new HumanInventory(Needs);
+
             walkAnimation.SetMap(map);
             walkAnimation.SetUnitType(zombie);
             this.zombieFrames = zombieFrames;
@@ -1803,6 +1808,7 @@ namespace RotWorld
             map.RegisterUnit(true, populationIndex, this);
             isZombie = true;
             Needs = null;
+            Inventory = null;
             isDowned = false;
             hasBeenHit = false;
             hitCount = 0;

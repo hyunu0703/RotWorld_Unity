@@ -1,12 +1,13 @@
 namespace RotWorld
 {
     /// <summary>
-    /// 아이템의 음식 및 음료 분류
+    /// 아이템의 음식 및 음료와 장비 분류
     /// </summary>
     public enum ItemCategory
     {
         Food,
-        Drink
+        Drink,
+        Equipment
     }
 
     /// <summary>
@@ -23,8 +24,12 @@ namespace RotWorld
         public int HungerRecovery { get; }
         public int ThirstRecovery { get; }
 
+        // 착용 시 추가할 소지 칸 수
+        public int AdditionalSlots { get; }
+
         // 카탈로그의 고정 아이템 정보 보관
-        internal ItemDefinition(string code, string name, ItemCategory category, int hungerRecovery, int thirstRecovery)
+        internal ItemDefinition(string code, string name, ItemCategory category, int hungerRecovery, int thirstRecovery,
+            int additionalSlots = 0)
         {
             // 카탈로그 정의값을 외부에서 변경할 수 없는 정보로 전달
             Code = code;
@@ -32,6 +37,7 @@ namespace RotWorld
             Category = category;
             HungerRecovery = hungerRecovery;
             ThirstRecovery = thirstRecovery;
+            AdditionalSlots = additionalSlots;
         }
     }
 }

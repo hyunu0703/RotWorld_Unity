@@ -4,11 +4,12 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
+using UnityEngine.UI;
 
 namespace RotWorld
 {
     /// <summary>
-    /// 클릭한 인간의 허기와 갈증 표시 및 화면 경계 내 유닛 추적
+    /// 선택 인간의 생존 수치와 소지품 표시 및 사용과 위치 추적
     /// </summary>
     public sealed class HumanNeedsPanel
     {
@@ -34,6 +35,18 @@ namespace RotWorld
         private double displayedHunger = -1d;
         private double displayedThirst = -1d;
 
+        // 한 줄 5칸의 소지품 표시와 가방 착용에 따른 패널 확장
+        public const int SlotColumns = 5;
+        public const float SlotSize = 48f;
+        public const float SlotGap = 6f;
+        public const float SlotTop = 116f;
+        public const float PanelPadding = 16f;
+        public const float PanelWidth = 300f;
+        private readonly Button[] slotButtons;
+        private readonly TMP_Text[] slotLabels;
+        private HumanInventory displayedInventory;
+        private int displayedVersion = -1;
+
         // UI 클릭 차단과 화면 경계 여백
         private readonly PointerEventData pointer;
         private readonly List<RaycastResult> raycasts = new List<RaycastResult>();
@@ -42,7 +55,8 @@ namespace RotWorld
 
         // 기존 캔버스와 표시 요소를 선택 및 위치 추적에 연결
         public HumanNeedsPanel(CityMapView mapView, Camera worldCamera, RectTransform canvasRect,
-            RectTransform panel, TMP_Text hungerLabel, TMP_Text thirstLabel, RectTransform selectionMarker)
+            RectTransform panel, TMP_Text hungerLabel, TMP_Text thirstLabel, RectTransform selectionMarker,
+            Button[] slotButtons, TMP_Text[] slotLabels)
         {
             // 필수 표시 참조와 입력 시스템 누락의 조기 확인
             if (mapView == null || worldCamera == null || canvasRect == null || panel == null ||
@@ -58,6 +72,23 @@ namespace RotWorld
             this.hungerLabel = hungerLabel;
             this.thirstLabel = thirstLabel;
             this.selectionMarker = selectionMarker;
+            this.slotButtons = slotButtons ?? throw new ArgumentNullException(nameof(slotButtons));
+            this.slotLabels = slotLabels ?? throw new ArgumentNullException(nameof(slotLabels));
+
+            if (slotButtons.Length != HumanInventory.MaximumCapacity || slotLabels.Length != slotButtons.Length)
+            {
+                throw new ArgumentException("소지품 슬롯 표시 요소 누락");
+            }
+
+            // 클릭과 갱신 전에 모든 슬롯의 필수 표시 참조 검증
+            for (int i = 0; i < slotButtons.Length; i++)
+            {
+                if (slotButtons[i] == null || slotLabels[i] == null)
+                {
+                    throw new ArgumentException("소지품 슬롯 버튼 또는 텍스트 누락");
+                }
+            }
+
             pointer = new PointerEventData(EventSystem.current);
         }
 
@@ -94,7 +125,7 @@ namespace RotWorld
 
             // 지도 교체와 쓰러짐 및 좀비 전환 후 이전 인간 정보 제거
             if (selectedHuman == null || selectedMap != mapView.Map || !selectedHuman.isActiveAndEnabled ||
-                !selectedHuman.IsHumanTarget || selectedHuman.Needs == null)
+                !selectedHuman.IsHumanTarget || selectedHuman.Needs == null || selectedHuman.Inventory == null)
             {
                 selectedHuman = null;
                 panel.gameObject.SetActive(false);
@@ -102,8 +133,64 @@ namespace RotWorld
                 return;
             }
 
+            RefreshInventory();
             RefreshPosition();
             RefreshValues();
+        }
+
+
+        // 선택된 인간의 소지 슬롯 사용
+        public void UseSlot(int index)
+        {
+            // 쓰러짐과 지도 교체 후 이전 대상의 소지품 사용 차단
+            if (!CanUseInventory())
+            {
+                return;
+            }
+
+            selectedHuman.Inventory.TryUse(index);
+            RefreshInventory();
+            RefreshValues();
+            RefreshPosition();
+        }
+
+
+        // 현재 지도에서 소지품을 사용할 수 있는 인간인지 확인
+        private bool CanUseInventory()
+        {
+            // UI가 닫히기 전의 오래된 클릭과 소환 모드 입력 차단
+            return selectedHuman != null && selectedMap == mapView.Map && selectedHuman.isActiveAndEnabled &&
+                selectedHuman.IsHumanTarget && selectedHuman.Inventory != null && !mapView.IsInputBlocked;
+        }
+
+
+        // 소지품 변경 시 슬롯과 패널 높이 동기화
+        private void RefreshInventory()
+        {
+            // 같은 인간의 변경 없는 소지품 표시 작업 생략
+            var inventory = selectedHuman.Inventory;
+
+            if (displayedInventory == inventory && displayedVersion == inventory.Version)
+            {
+                return;
+            }
+
+            displayedInventory = inventory;
+            displayedVersion = inventory.Version;
+
+            for (int i = 0; i < slotButtons.Length; i++)
+            {
+                // 기본 5칸 또는 가방 착용 후 15칸만 표시
+                bool isAvailable = i < inventory.Capacity;
+                slotButtons[i].gameObject.SetActive(isAvailable);
+                var item = inventory.Slots[i];
+                slotButtons[i].interactable = isAvailable && item != null;
+                slotLabels[i].text = item == null ? "" : item.Name + "\n1";
+            }
+
+            // 마지막 슬롯 줄까지 남색 배경 확장
+            int rows = inventory.Capacity / SlotColumns;
+            panel.sizeDelta = new Vector2(PanelWidth, SlotTop + rows * (SlotSize + SlotGap) - SlotGap + PanelPadding);
         }
 
 

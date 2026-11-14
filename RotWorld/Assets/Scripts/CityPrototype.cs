@@ -674,8 +674,6 @@ namespace RotWorld
         private void BuildHumanNeedsPanel(RectTransform canvasRect)
         {
             // 지도 위와 인간 아래에 렌더링할 선택 표시 전용 월드 캔버스 구성
-            const float PanelWidth = 220f;
-            const float PanelHeight = 116f;
             var markerCanvasRect = Rect("Unit Selection Canvas", transform, new Vector2(.5f, .5f), new Vector2(.5f, .5f),
                 Vector2.zero, Vector2.one);
             var markerCanvas = markerCanvasRect.gameObject.AddComponent<Canvas>();
@@ -692,14 +690,36 @@ namespace RotWorld
 
             // 생존 정보 패널은 기존 화면 캔버스에서 표시
             var panel = Rect("Human Needs", canvasRect, new Vector2(.5f, .5f), new Vector2(0f, 1f),
-                Vector2.zero, new Vector2(PanelWidth, PanelHeight));
+                Vector2.zero, new Vector2(HumanNeedsPanel.PanelWidth,
+                    HumanNeedsPanel.SlotTop + HumanNeedsPanel.SlotSize + HumanNeedsPanel.PanelPadding));
             Background(panel, PanelColor);
             Label(panel, "인간", new Vector2(16f, -10f), new Vector2(188f, 26f), 20f);
             var hungerLabel = Label(panel, "허기", new Vector2(16f, -44f), new Vector2(188f, 26f));
             var thirstLabel = Label(panel, "갈증", new Vector2(16f, -76f), new Vector2(188f, 26f));
 
+            // 슬롯 클릭으로 한 개 사용하거나 가방을 착용하는 5열 배치 구성
+            var slotButtons = new Button[HumanInventory.MaximumCapacity];
+            var slotLabels = new TMP_Text[HumanInventory.MaximumCapacity];
+
+            for (int i = 0; i < slotButtons.Length; i++)
+            {
+                int slotIndex = i;
+                var position = new Vector2(HumanNeedsPanel.PanelPadding + i % HumanNeedsPanel.SlotColumns *
+                    (HumanNeedsPanel.SlotSize + HumanNeedsPanel.SlotGap),
+                    -HumanNeedsPanel.SlotTop - i / HumanNeedsPanel.SlotColumns *
+                    (HumanNeedsPanel.SlotSize + HumanNeedsPanel.SlotGap));
+                var button = MakeButton(panel, "", position, Vector2.one * HumanNeedsPanel.SlotSize,
+                    () => humanNeedsPanel.UseSlot(slotIndex));
+                var label = button.GetComponentInChildren<TMP_Text>();
+                label.fontSize = 11f;
+                slotButtons[i] = button;
+                slotLabels[i] = label;
+                button.gameObject.SetActive(i < HumanInventory.BaseCapacity);
+            }
+
             // 클릭과 위치 갱신은 독립 표시 객체에 위임
-            humanNeedsPanel = new HumanNeedsPanel(mapView, worldCamera, canvasRect, panel, hungerLabel, thirstLabel, selectionMarker);
+            humanNeedsPanel = new HumanNeedsPanel(mapView, worldCamera, canvasRect, panel, hungerLabel, thirstLabel,
+                selectionMarker, slotButtons, slotLabels);
             panel.gameObject.SetActive(false);
         }
 
