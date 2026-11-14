@@ -63,17 +63,20 @@ namespace RotWorld
         public RectInt Bounds { get; }
         public Vector2Int Door { get; }
 
-        // 건물 용도와 아이템 재고
+        // 기존 외형 분류와 독립적인 건물 종류 및 아이템 재고
         public int Kind { get; }
+        public BuildingType Type { get; }
+        public string Name => BuildingCatalog.GetName(Type);
         public int[] Stock { get; }
 
         // 생성된 필지와 재고 연결
-        public CityBuilding(RectInt bounds, Vector2Int door, int kind, int[] stock)
+        public CityBuilding(RectInt bounds, Vector2Int door, int kind, int[] stock, BuildingType type = BuildingType.Unspecified)
         {
             // 생성 결과의 필지와 출입구 및 재고 참조 보관
             Bounds = bounds;
             Door = door;
             Kind = kind;
+            Type = type;
             Stock = stock;
         }
     }

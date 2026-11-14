@@ -576,6 +576,31 @@ namespace RotWorld
         }
 
 
+        // 화면 클릭 좌표에서 실제 건물 바닥 영역 조회
+        internal CityBuilding GetBuildingAtScreenPosition(Vector2 screenPosition)
+        {
+            // 소환 모드 외 입력 차단과 카메라 외부 클릭 거부
+            if (mapData == null || viewCamera == null || IsInputBlocked || !viewCamera.pixelRect.Contains(screenPosition))
+            {
+                return null;
+            }
+
+            // 지도 부모 변환을 적용한 클릭 타일과 건물 바닥 대조
+            Vector2 local = transform.InverseTransformPoint(viewCamera.ScreenToWorldPoint(screenPosition));
+            var tile = new Vector2Int(Mathf.FloorToInt(local.x), Mathf.FloorToInt(local.y));
+
+            foreach (var building in mapData.Buildings)
+            {
+                if (building.Bounds.Contains(tile))
+                {
+                    return building;
+                }
+            }
+
+            return null;
+        }
+
+
         // 화면 클릭 좌표를 지도 타일로 변환해 데이터와 유닛 표시 추가
         public bool TrySummon(Vector2 screenPosition, bool zombie)
         {

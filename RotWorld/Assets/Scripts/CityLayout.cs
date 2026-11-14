@@ -95,6 +95,8 @@ namespace RotWorld
             ConnectBuildings();
             PopulateBuildings();
             ConnectBuildings();
+            PopulateNaturalBuildings();
+            AssignBuildingTypes();
         }
 
 
@@ -1113,6 +1115,73 @@ namespace RotWorld
         }
 
 
+        // 자연 지역의 기존 도로 주변에 소수의 피난 시설 배치
+        private void PopulateNaturalBuildings()
+        {
+            // 지도 크기에 비례한 희소 배치와 별도 난수 소비 없는 탐색 시작점
+            const int TilesPerFacility = 128;
+            const int FacilityGap = 4;
+            const int FacilityWidth = 4;
+            const int FacilityHeight = 5;
+            const float SpacingDivisor = 8f;
+            int target = Math.Max(1, mapSize / TilesPerFacility);
+            int start = (int)((uint)mapData.Seed % (uint)mapData.Tiles.Length);
+            var placedCenters = new List<Vector2>();
+            var offsets = new[] { new Vector2Int(4, -2), new Vector2Int(-8, -2),
+                new Vector2Int(-2, 4), new Vector2Int(-2, -9) };
+            float minimumDistance = mapSize / SpacingDivisor;
+
+            for (int step = 0; step < mapData.Tiles.Length && placedCenters.Count < target; step++)
+            {
+                int index = (start + step) % mapData.Tiles.Length;
+
+                if (mapData.Tiles[index] != CityGenerator.Road)
+                {
+                    continue;
+                }
+
+                foreach (var offset in offsets)
+                {
+                    var bounds = new RectInt(index % mapSize + offset.x, index / mapSize + offset.y, FacilityWidth, FacilityHeight);
+                    bool isTooClose = false;
+
+                    // 같은 도로 주변의 밀집을 피하기 위한 시설 간 거리 확인
+                    foreach (var center in placedCenters)
+                    {
+                        if ((center - bounds.center).sqrMagnitude < minimumDistance * minimumDistance)
+                        {
+                            isTooClose = true;
+                            break;
+                        }
+                    }
+
+                    if (!isTooClose && TryBuilding(bounds, CityRegion.Natural, 0, FacilityGap))
+                    {
+                        placedCenters.Add(bounds.center);
+                        break;
+                    }
+                }
+            }
+        }
+
+
+        // 최종 출입구 확정 후 구역별 건물 종류 부여
+        private void AssignBuildingTypes()
+        {
+            // 기존 외형과 재고를 보존하며 독립된 종류 데이터 생성
+            var counts = new int[mapData.RegionTargets.Length];
+
+            for (int i = 0; i < mapData.Buildings.Count; i++)
+            {
+                var building = mapData.Buildings[i];
+                var center = building.Bounds.center;
+                var region = mapData.Regions[(int)center.y * mapSize + (int)center.x];
+                var type = BuildingCatalog.Select(region, mapData.Seed, counts[(int)region]++);
+                mapData.Buildings[i] = new CityBuilding(building.Bounds, building.Door, building.Kind, building.Stock, type);
+            }
+        }
+
+
         // 지역별 실제 건물 수 조회
         private int CountBuildings(CityRegion region)
         {
@@ -1229,7 +1298,7 @@ namespace RotWorld
 
                 if (door != building.Door)
                 {
-                    mapData.Buildings[b] = new CityBuilding(bounds, door, building.Kind, building.Stock);
+                    mapData.Buildings[b] = new CityBuilding(bounds, door, building.Kind, building.Stock, building.Type);
                 }
             }
         }

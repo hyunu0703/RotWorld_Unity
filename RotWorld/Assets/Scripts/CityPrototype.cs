@@ -111,6 +111,9 @@ namespace RotWorld
         // 선택한 인간의 생존 수치와 화면 위치 표시
         private HumanNeedsPanel humanNeedsPanel;
 
+        // 선택한 건물의 이름과 지붕 위 위치 표시
+        private BuildingInfoPanel buildingInfoPanel;
+
         // 생성 설정 입력과 중복 실행 제어
         private TMP_InputField seedInput;
         private TMP_InputField humansInput;
@@ -191,6 +194,11 @@ namespace RotWorld
             if (humanNeedsPanel != null)
             {
                 humanNeedsPanel.Refresh(summonSelection == SummonSelection.None);
+            }
+
+            if (buildingInfoPanel != null)
+            {
+                buildingInfoPanel.Refresh(summonSelection == SummonSelection.None);
             }
 
             // 비활성 선택과 입력 차단 상태에서 커서 숨김
@@ -643,6 +651,7 @@ namespace RotWorld
             welcomeRect.pivot = new Vector2(.5f, .5f);
             welcomeLabel.alignment = TextAlignmentOptions.Center;
             BuildHumanNeedsPanel(canvasRect);
+            BuildBuildingInfoPanel(canvasRect);
 
             // 생성 설정 입력과 상태 안내 및 실행 버튼 구성
             var dialog = Rect("Map Generation", canvasRect, new Vector2(1, 0), new Vector2(1, 0), new Vector2(-18, 78), new Vector2(466, 526));
@@ -667,6 +676,20 @@ namespace RotWorld
             summonCursor = cursorRect.gameObject.AddComponent<Image>();
             summonCursor.raycastTarget = false;
             summonCursor.gameObject.SetActive(false);
+        }
+
+
+        // 기존 폰트와 색상을 사용하는 건물 이름 패널 구성
+        private void BuildBuildingInfoPanel(RectTransform canvasRect)
+        {
+            // 건물 상단 중앙에 연결할 하단 중심 기준의 이름 패널 구성
+            var panel = Rect("Building Info", canvasRect, new Vector2(.5f, .5f), new Vector2(.5f, 0f),
+                Vector2.zero, Vector2.zero);
+            Background(panel, PanelColor).raycastTarget = false;
+            var label = Label(panel, "", Vector2.zero, Vector2.zero);
+            label.alignment = TextAlignmentOptions.Center;
+            buildingInfoPanel = new BuildingInfoPanel(mapView, worldCamera, canvasRect, panel, label);
+            panel.gameObject.SetActive(false);
         }
 
 
