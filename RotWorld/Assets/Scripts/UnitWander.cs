@@ -105,7 +105,6 @@ namespace RotWorld
         private bool isDirectPursuit;
         private Vector2? wanderExitTarget;
         internal const float SeparationDistance = .9f;
-        private const float PursuitSpeedAdvantage = 1.05f;
         private const float MaximumSubstep = .1f;
         private readonly List<int> clearanceCandidates = new List<int>();
         private readonly List<Vector2Int> reservations = new List<Vector2Int>();
@@ -277,12 +276,6 @@ namespace RotWorld
             {
                 walkAnimation.Stop(cooperativeLeader == null);
                 return;
-            }
-
-            // 추격 속도 보정에 사용할 인간의 실제 지형 속도 공유
-            if (!isZombie)
-            {
-                map.HumanSpeeds[populationIndex] = humanSpeed * (hasBeenHit ? InjuredSpeedMultiplier : 1f) * speedVariation * UnitPathfinder.SpeedMultiplier(map, currentTile);
             }
 
             // 처치 직후 유형과 무관하게 쓰러진 상대에서 떨어지는 배회 구간 우선 실행
@@ -1475,7 +1468,6 @@ namespace RotWorld
             pathIndex = 0;
             hasChasePath = false;
             map.InactiveHumans.Add(populationIndex);
-            map.HumanSpeeds[populationIndex] = 0f;
             walkAnimation.SetDownedSortingOrder();
             walkAnimation.SetKnockbackHeight(0f);
             walkAnimation.Stop();
@@ -1799,7 +1791,6 @@ namespace RotWorld
             map.RemoveUnitPosition(false, oldIndex);
 
             map.HumanSpatialIndex.Remove(oldIndex);
-            map.HumanSpeeds.Remove(oldIndex);
             map.HumanDestinations.Remove(oldIndex);
 
             // 쓰러질 때 반환한 점유를 재해제하지 않고 변환 위치에서 새 점유 확보
@@ -1937,14 +1928,6 @@ namespace RotWorld
         }
 
 
-        // 지형과 개체 편차 반영 후 인간보다 빠른 추적 속도 계산
-        internal static float CalculatePursuitSpeed(float configuredSpeed, float humanActualSpeed)
-        {
-            // 설정 속도와 인간 실제 속도의 우위 보정 중 큰 값 선택
-            return Mathf.Max(configuredSpeed, humanActualSpeed * PursuitSpeedAdvantage);
-        }
-
-
         // 지정 좀비의 실제 위치 변화에서 가로채기 예측용 속도 갱신
         private void UpdateCooperativeTargetMotion()
         {
@@ -2047,11 +2030,6 @@ namespace RotWorld
                 ? live : hasTarget ? (Vector2)map.Humans[chaseTarget] : currentTile;
             float configuredSpeed = isZombie ? (hasTarget ? zombieChaseSpeed : zombieSpeed) : humanSpeed * (hasBeenHit ? InjuredSpeedMultiplier : 1f);
             float baseSpeed = configuredSpeed * speedVariation * UnitPathfinder.SpeedMultiplier(map, currentTile);
-
-            if (isZombie && hasTarget && map.HumanSpeeds.TryGetValue(chaseTarget, out float humanActualSpeed))
-            {
-                baseSpeed = CalculatePursuitSpeed(baseSpeed, humanActualSpeed);
-            }
 
             // 지원자는 현재 좀비 뒤를 따라가는 대신 예상 이동 경로로 측면 접근
             if (!isZombie && hasTarget)
@@ -2511,7 +2489,6 @@ namespace RotWorld
                 if (!isZombie)
                 {
                     map.HumanDestinations.Remove(populationIndex);
-                    map.HumanSpeeds.Remove(populationIndex);
                     map.RemoveUnit(false, populationIndex);
                 }
             }
