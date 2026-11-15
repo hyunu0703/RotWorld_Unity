@@ -86,21 +86,27 @@ namespace RotWorld
                 return;
             }
 
-            // 거점 생성·해제나 거점 인원 변경이 있을 때만 라벨 목록과 문자열 재구성
+            // 거점 생성·해제나 거점 인원 변경이 있을 때만 라벨 목록 재구성
             if (displayedVersion != map.Bases.Version)
             {
                 displayedVersion = map.Bases.Version;
                 RebuildLabels(map.Bases);
             }
 
+            // 변경 통지와 별개로 정착 인원을 직접 비교해 바뀐 라벨만 문자열 갱신하고 화면 위치 추적
             foreach (var label in activeLabels)
             {
+                if (label.Base.Building.SettlerCount != label.DisplayedCount)
+                {
+                    RefreshText(label);
+                }
+
                 RefreshPosition(label);
             }
         }
 
 
-        // 거점마다 라벨을 배정하고 인원이 바뀐 라벨만 문자열 갱신
+        // 해제된 거점의 라벨 반환과 새 거점의 라벨 배정
         private void RebuildLabels(SettlementBases bases)
         {
             // 해제된 거점의 라벨 반환
@@ -113,7 +119,7 @@ namespace RotWorld
                 }
             }
 
-            // 새 거점에 라벨 배정
+            // 새 거점에 라벨 배정 후 표시 인원 미설정 상태로 두어 같은 프레임에 문자열 생성
             foreach (var settlementBase in bases.All)
             {
                 if (FindLabel(settlementBase) == null)
@@ -121,24 +127,20 @@ namespace RotWorld
                     activeLabels.Add(Acquire(settlementBase));
                 }
             }
+        }
 
-            // 정착 인원이 바뀐 라벨만 텍스트와 크기 갱신
-            foreach (var label in activeLabels)
-            {
-                CityBuilding building = label.Base.Building;
-                int count = building.SettlerCount;
 
-                if (count == label.DisplayedCount)
-                {
-                    continue;
-                }
-
-                label.DisplayedCount = count;
-                string text = building.Name + " [" + count + "]";
-                label.Text.text = text;
-                Vector2 size = label.Text.GetPreferredValues(text);
-                label.Panel.sizeDelta = new Vector2(Mathf.Ceil(size.x) + HorizontalPadding * 2f, Mathf.Ceil(size.y) + VerticalPadding * 2f);
-            }
+        // 현재 정착 인원으로 라벨 문자열과 크기 갱신
+        private void RefreshText(Label label)
+        {
+            // 정착 인원이 바뀐 경우에만 호출되어 문자열 생성 최소화
+            CityBuilding building = label.Base.Building;
+            int count = building.SettlerCount;
+            label.DisplayedCount = count;
+            string text = building.Name + " [" + count + "]";
+            label.Text.text = text;
+            Vector2 size = label.Text.GetPreferredValues(text);
+            label.Panel.sizeDelta = new Vector2(Mathf.Ceil(size.x) + HorizontalPadding * 2f, Mathf.Ceil(size.y) + VerticalPadding * 2f);
         }
 
 

@@ -25,55 +25,55 @@ namespace RotWorld
         private const double SupplyPercentageBase = 100d;
         private const int PercentRange = 100;
 
-        // 레벨디자인 v1 기준 건물 종류별 재고 규칙
+        // 레벨디자인 v1 기준 건물 종류별 재고 규칙, 갈증 회복 아이템(생수·과일 주스)은 최소·최대 수량 3배
         private static readonly Dictionary<BuildingType, StockRule> Rules = new Dictionary<BuildingType, StockRule>
         {
             // 복합 시가지
-            { BuildingType.DetachedHouse, new StockRule(biscuit: Range(0, 2), bread: Range(0, 2), cannedFood: Range(1, 3), water: Range(1, 3), fruitJuice: Range(0, 2), bagPercent: 10) },
-            { BuildingType.Villa, new StockRule(biscuit: Range(0, 2), bread: Range(0, 1), cannedFood: Range(0, 2), water: Range(1, 2), fruitJuice: Range(0, 1), bagPercent: 5) },
-            { BuildingType.ConvenienceStore, new StockRule(biscuit: Range(3, 6), bread: Range(2, 4), cannedFood: Range(1, 3), water: Range(4, 8), fruitJuice: Range(3, 6)) },
-            { BuildingType.NeighborhoodMarket, new StockRule(biscuit: Range(2, 4), bread: Range(1, 3), cannedFood: Range(4, 8), water: Range(4, 7), fruitJuice: Range(2, 4)) },
-            { BuildingType.Restaurant, new StockRule(bread: Range(1, 3), cannedFood: Range(2, 4), water: Range(2, 4), fruitJuice: Range(0, 2)) },
-            { BuildingType.Pharmacy, new StockRule(biscuit: Range(0, 2), water: Range(1, 3), fruitJuice: Range(1, 3)) },
-            { BuildingType.HardwareStore, new StockRule(biscuit: Range(0, 1), water: Range(0, 2), bagPercent: 15) },
+            { BuildingType.DetachedHouse, new StockRule(biscuit: Range(0, 2), bread: Range(0, 2), cannedFood: Range(1, 3), water: Range(3, 9), fruitJuice: Range(0, 6), bagPercent: 10) },
+            { BuildingType.Villa, new StockRule(biscuit: Range(0, 2), bread: Range(0, 1), cannedFood: Range(0, 2), water: Range(3, 6), fruitJuice: Range(0, 3), bagPercent: 5) },
+            { BuildingType.ConvenienceStore, new StockRule(biscuit: Range(3, 6), bread: Range(2, 4), cannedFood: Range(1, 3), water: Range(12, 24), fruitJuice: Range(9, 18)) },
+            { BuildingType.NeighborhoodMarket, new StockRule(biscuit: Range(2, 4), bread: Range(1, 3), cannedFood: Range(4, 8), water: Range(12, 21), fruitJuice: Range(6, 12)) },
+            { BuildingType.Restaurant, new StockRule(bread: Range(1, 3), cannedFood: Range(2, 4), water: Range(6, 12), fruitJuice: Range(0, 6)) },
+            { BuildingType.Pharmacy, new StockRule(biscuit: Range(0, 2), water: Range(3, 9), fruitJuice: Range(3, 9)) },
+            { BuildingType.HardwareStore, new StockRule(biscuit: Range(0, 1), water: Range(0, 6), bagPercent: 15) },
 
             // 분산된 마을
-            { BuildingType.CountryHouse, new StockRule(biscuit: Range(0, 1), bread: Range(0, 1), cannedFood: Range(2, 4), water: Range(1, 3), fruitJuice: Range(0, 1), bagPercent: 10) },
-            { BuildingType.SmallSupermarket, new StockRule(biscuit: Range(2, 4), bread: Range(1, 3), cannedFood: Range(3, 6), water: Range(3, 6), fruitJuice: Range(1, 3)) },
-            { BuildingType.VillageHall, new StockRule(biscuit: Range(1, 3), cannedFood: Range(0, 2), water: Range(2, 4), fruitJuice: Range(1, 3), bagPercent: 5) },
-            { BuildingType.FarmToolStorage, new StockRule(cannedFood: Range(0, 1), water: Range(0, 1), bagPercent: 10) },
-            { BuildingType.HealthCenter, new StockRule(biscuit: Range(0, 1), water: Range(2, 4), fruitJuice: Range(0, 2)) },
+            { BuildingType.CountryHouse, new StockRule(biscuit: Range(0, 1), bread: Range(0, 1), cannedFood: Range(2, 4), water: Range(3, 9), fruitJuice: Range(0, 3), bagPercent: 10) },
+            { BuildingType.SmallSupermarket, new StockRule(biscuit: Range(2, 4), bread: Range(1, 3), cannedFood: Range(3, 6), water: Range(9, 18), fruitJuice: Range(3, 9)) },
+            { BuildingType.VillageHall, new StockRule(biscuit: Range(1, 3), cannedFood: Range(0, 2), water: Range(6, 12), fruitJuice: Range(3, 9), bagPercent: 5) },
+            { BuildingType.FarmToolStorage, new StockRule(cannedFood: Range(0, 1), water: Range(0, 3), bagPercent: 10) },
+            { BuildingType.HealthCenter, new StockRule(biscuit: Range(0, 1), water: Range(6, 12), fruitJuice: Range(0, 6)) },
 
             // 고밀도 도심
-            { BuildingType.Apartment, new StockRule(biscuit: Range(1, 4), bread: Range(1, 3), cannedFood: Range(2, 5), water: Range(2, 5), fruitJuice: Range(1, 3), bagPercent: 20) },
-            { BuildingType.OfficeBuilding, new StockRule(biscuit: Range(2, 4), bread: Range(0, 1), water: Range(3, 6), fruitJuice: Range(0, 2), bagPercent: 15) },
-            { BuildingType.Hypermarket, new StockRule(biscuit: Range(6, 10), bread: Range(4, 8), cannedFood: Range(8, 14), combatRation: Range(0, 1), water: Range(10, 16), fruitJuice: Range(5, 9), bagPercent: 30) },
-            { BuildingType.Hotel, new StockRule(biscuit: Range(1, 3), bread: Range(1, 3), water: Range(3, 6), fruitJuice: Range(2, 4), bagPercent: 40) },
-            { BuildingType.Hospital, new StockRule(biscuit: Range(1, 3), bread: Range(0, 2), water: Range(3, 6), fruitJuice: Range(2, 4)) },
-            { BuildingType.DepartmentStore, new StockRule(biscuit: Range(2, 4), bread: Range(2, 4), cannedFood: Range(1, 3), water: Range(2, 4), fruitJuice: Range(2, 4), bagPercent: 100) },
-            { BuildingType.PoliceStation, new StockRule(biscuit: Range(0, 2), combatRation: Range(2, 4), water: Range(3, 5), bagPercent: 30) },
+            { BuildingType.Apartment, new StockRule(biscuit: Range(1, 4), bread: Range(1, 3), cannedFood: Range(2, 5), water: Range(6, 15), fruitJuice: Range(3, 9), bagPercent: 20) },
+            { BuildingType.OfficeBuilding, new StockRule(biscuit: Range(2, 4), bread: Range(0, 1), water: Range(9, 18), fruitJuice: Range(0, 6), bagPercent: 15) },
+            { BuildingType.Hypermarket, new StockRule(biscuit: Range(6, 10), bread: Range(4, 8), cannedFood: Range(8, 14), combatRation: Range(0, 1), water: Range(30, 48), fruitJuice: Range(15, 27), bagPercent: 30) },
+            { BuildingType.Hotel, new StockRule(biscuit: Range(1, 3), bread: Range(1, 3), water: Range(9, 18), fruitJuice: Range(6, 12), bagPercent: 40) },
+            { BuildingType.Hospital, new StockRule(biscuit: Range(1, 3), bread: Range(0, 2), water: Range(9, 18), fruitJuice: Range(6, 12)) },
+            { BuildingType.DepartmentStore, new StockRule(biscuit: Range(2, 4), bread: Range(2, 4), cannedFood: Range(1, 3), water: Range(6, 12), fruitJuice: Range(6, 12), bagPercent: 100) },
+            { BuildingType.PoliceStation, new StockRule(biscuit: Range(0, 2), combatRation: Range(2, 4), water: Range(9, 15), bagPercent: 30) },
 
             // 강변 도시
-            { BuildingType.RiversideHouse, new StockRule(biscuit: Range(0, 2), bread: Range(0, 2), cannedFood: Range(1, 3), water: Range(1, 3), fruitJuice: Range(0, 2), bagPercent: 10) },
-            { BuildingType.Cafe, new StockRule(biscuit: Range(1, 3), bread: Range(2, 4), water: Range(2, 4), fruitJuice: Range(3, 6)) },
-            { BuildingType.RiversideRestaurant, new StockRule(bread: Range(1, 2), cannedFood: Range(2, 5), water: Range(2, 4), fruitJuice: Range(1, 2)) },
-            { BuildingType.SmallWarehouse, new StockRule(cannedFood: Range(0, 4), water: Range(0, 4), bagPercent: 10) },
-            { BuildingType.FishingSupplyStore, new StockRule(biscuit: Range(1, 2), cannedFood: Range(1, 3), combatRation: Range(0, 2), water: Range(2, 4), bagPercent: 60) },
-            { BuildingType.WaterfrontOffice, new StockRule(biscuit: Range(0, 2), cannedFood: Range(0, 1), combatRation: Range(0, 1), water: Range(2, 3), bagPercent: 5) },
+            { BuildingType.RiversideHouse, new StockRule(biscuit: Range(0, 2), bread: Range(0, 2), cannedFood: Range(1, 3), water: Range(3, 9), fruitJuice: Range(0, 6), bagPercent: 10) },
+            { BuildingType.Cafe, new StockRule(biscuit: Range(1, 3), bread: Range(2, 4), water: Range(6, 12), fruitJuice: Range(9, 18)) },
+            { BuildingType.RiversideRestaurant, new StockRule(bread: Range(1, 2), cannedFood: Range(2, 5), water: Range(6, 12), fruitJuice: Range(3, 6)) },
+            { BuildingType.SmallWarehouse, new StockRule(cannedFood: Range(0, 4), water: Range(0, 12), bagPercent: 10) },
+            { BuildingType.FishingSupplyStore, new StockRule(biscuit: Range(1, 2), cannedFood: Range(1, 3), combatRation: Range(0, 2), water: Range(6, 12), bagPercent: 60) },
+            { BuildingType.WaterfrontOffice, new StockRule(biscuit: Range(0, 2), cannedFood: Range(0, 1), combatRation: Range(0, 1), water: Range(6, 9), bagPercent: 5) },
 
             // 산업 외곽
-            { BuildingType.Factory, new StockRule(biscuit: Range(0, 2), cannedFood: Range(0, 1), water: Range(1, 3), bagPercent: 5) },
-            { BuildingType.LogisticsWarehouse, new StockRule(biscuit: Range(0, 6), cannedFood: Range(0, 8), water: Range(0, 8), fruitJuice: Range(0, 4), bagPercent: 20) },
-            { BuildingType.RepairShop, new StockRule(biscuit: Range(0, 1), water: Range(1, 2), fruitJuice: Range(0, 1), bagPercent: 10) },
-            { BuildingType.StaffDormitory, new StockRule(biscuit: Range(1, 3), bread: Range(0, 2), cannedFood: Range(2, 4), water: Range(2, 4), fruitJuice: Range(0, 2), bagPercent: 15) },
-            { BuildingType.ToolStore, new StockRule(water: Range(0, 1), bagPercent: 25) },
-            { BuildingType.Guardhouse, new StockRule(biscuit: Range(0, 2), combatRation: Range(0, 1), water: Range(1, 2)) },
+            { BuildingType.Factory, new StockRule(biscuit: Range(0, 2), cannedFood: Range(0, 1), water: Range(3, 9), bagPercent: 5) },
+            { BuildingType.LogisticsWarehouse, new StockRule(biscuit: Range(0, 6), cannedFood: Range(0, 8), water: Range(0, 24), fruitJuice: Range(0, 12), bagPercent: 20) },
+            { BuildingType.RepairShop, new StockRule(biscuit: Range(0, 1), water: Range(3, 6), fruitJuice: Range(0, 3), bagPercent: 10) },
+            { BuildingType.StaffDormitory, new StockRule(biscuit: Range(1, 3), bread: Range(0, 2), cannedFood: Range(2, 4), water: Range(6, 12), fruitJuice: Range(0, 6), bagPercent: 15) },
+            { BuildingType.ToolStore, new StockRule(water: Range(0, 3), bagPercent: 25) },
+            { BuildingType.Guardhouse, new StockRule(biscuit: Range(0, 2), combatRation: Range(0, 1), water: Range(3, 6)) },
 
             // 자연·미개발 공간
-            { BuildingType.Cabin, new StockRule(biscuit: Range(0, 2), cannedFood: Range(1, 3), combatRation: Range(0, 2), water: Range(2, 4), bagPercent: 20) },
-            { BuildingType.CampsiteOffice, new StockRule(biscuit: Range(1, 3), cannedFood: Range(1, 3), combatRation: Range(0, 1), water: Range(3, 5), fruitJuice: Range(1, 2), bagPercent: 25) },
-            { BuildingType.PublicRestroom, new StockRule(water: Range(0, 1)) },
-            { BuildingType.CoastalOutpost, new StockRule(combatRation: Range(1, 3), water: Range(2, 3), bagPercent: 15) },
+            { BuildingType.Cabin, new StockRule(biscuit: Range(0, 2), cannedFood: Range(1, 3), combatRation: Range(0, 2), water: Range(6, 12), bagPercent: 20) },
+            { BuildingType.CampsiteOffice, new StockRule(biscuit: Range(1, 3), cannedFood: Range(1, 3), combatRation: Range(0, 1), water: Range(9, 15), fruitJuice: Range(3, 6), bagPercent: 25) },
+            { BuildingType.PublicRestroom, new StockRule(water: Range(0, 3)) },
+            { BuildingType.CoastalOutpost, new StockRule(combatRation: Range(1, 3), water: Range(6, 9), bagPercent: 15) },
         };
 
         // 재고 배열의 아이템 수
