@@ -383,6 +383,7 @@ namespace RotWorld
             isDowned = true;
             isStarved = true;
             Needs.Freeze();
+            brain.ReleaseSettlement();
             map.StarvedHumans.Add(populationIndex);
             map.NotifyPopulationChanged();
             enabled = false;

@@ -8,7 +8,7 @@ using UnityEngine.InputSystem;
 namespace RotWorld
 {
     /// <summary>
-    /// 클릭한 건물 이름과 내부 인원 수 표시 및 지붕 위 화면 위치 추적
+    /// 클릭한 건물 이름과 내부 인원 수 및 주거 시설 보관 재고 표시와 지붕 위 화면 위치 추적
     /// </summary>
     public sealed class BuildingInfoPanel
     {
@@ -18,6 +18,13 @@ namespace RotWorld
         private readonly RectTransform canvasRect;
         private readonly RectTransform panel;
         private readonly TMP_Text nameLabel;
+
+        // 주거 시설 보관량 줄과 ItemCatalog.All 순서의 읽기 전용 재고 칸
+        private readonly TMP_Text storageLabel;
+        private readonly RectTransform[] stockSlots;
+        private readonly TMP_Text[] stockLabels;
+        private const float StorageFontSize = 14f;
+        private const float StockSlotFontSize = 11f;
 
         // 텍스트 밀착 여백과 지도 축소 단계별 표시 크기
         private const float FontSize = 16f;
@@ -33,8 +40,9 @@ namespace RotWorld
         private float selectedTop;
         public CityBuilding SelectedBuilding => selectedBuilding;
 
-        // 마지막으로 표시한 내부 인원 수
+        // 마지막으로 표시한 내부 인원 수와 재고 버전
         private int displayedCount = -1;
+        private int displayedStockVersion = -1;
 
         // 기존 UI 클릭의 지도 선택 전파 차단
         private readonly PointerEventData pointer;
@@ -43,13 +51,29 @@ namespace RotWorld
 
         // 기존 지도와 UI 요소를 건물 선택 표시에 연결
         public BuildingInfoPanel(CityMapView mapView, Camera worldCamera, RectTransform canvasRect,
-            RectTransform panel, TMP_Text nameLabel)
+            RectTransform panel, TMP_Text nameLabel, TMP_Text storageLabel, RectTransform[] stockSlots, TMP_Text[] stockLabels)
         {
             // 최초 갱신 전에 필수 참조와 입력 시스템 확인
             if (mapView == null || worldCamera == null || canvasRect == null || panel == null ||
-                nameLabel == null || EventSystem.current == null)
+                nameLabel == null || storageLabel == null || EventSystem.current == null)
             {
                 throw new ArgumentException("건물 정보 UI의 지도, 카메라, 표시 요소 또는 이벤트 시스템 누락");
+            }
+
+            this.stockSlots = stockSlots ?? throw new ArgumentNullException(nameof(stockSlots));
+            this.stockLabels = stockLabels ?? throw new ArgumentNullException(nameof(stockLabels));
+
+            if (stockSlots.Length != ItemCatalog.All.Count || stockLabels.Length != stockSlots.Length)
+            {
+                throw new ArgumentException("건물 재고 칸 수가 아이템 종류 수와 다름");
+            }
+
+            for (int i = 0; i < stockSlots.Length; i++)
+            {
+                if (stockSlots[i] == null || stockLabels[i] == null)
+                {
+                    throw new ArgumentException("건물 재고 칸 표시 요소 누락");
+                }
             }
 
             this.mapView = mapView;
@@ -57,17 +81,28 @@ namespace RotWorld
             this.canvasRect = canvasRect;
             this.panel = panel;
             this.nameLabel = nameLabel;
+            this.storageLabel = storageLabel;
             pointer = new PointerEventData(EventSystem.current);
 
-            // 고정 폭과 줄바꿈을 제거하고 텍스트 주위에 작은 여백만 확보
-            nameLabel.fontSize = FontSize;
-            nameLabel.enableAutoSizing = false;
-            nameLabel.textWrappingMode = TextWrappingModes.NoWrap;
-            var textRect = nameLabel.rectTransform;
-            textRect.anchorMin = Vector2.zero;
-            textRect.anchorMax = Vector2.one;
-            textRect.offsetMin = new Vector2(HorizontalPadding, VerticalPadding);
-            textRect.offsetMax = new Vector2(-HorizontalPadding, -VerticalPadding);
+            // 고정 폭과 줄바꿈을 제거하고 이름 줄을 패널 상단에 고정
+            ConfigureLabel(nameLabel, FontSize);
+            ConfigureLabel(storageLabel, StorageFontSize);
+            PlaceTopRow(nameLabel.rectTransform, VerticalPadding, 0f);
+
+            // 재고 칸은 인간 소지품 칸과 같은 크기로 패널 왼쪽 위 기준 배치
+            for (int i = 0; i < stockSlots.Length; i++)
+            {
+                stockSlots[i].anchorMin = new Vector2(0f, 1f);
+                stockSlots[i].anchorMax = new Vector2(0f, 1f);
+                stockSlots[i].pivot = new Vector2(0f, 1f);
+                stockSlots[i].sizeDelta = Vector2.one * HumanNeedsPanel.SlotSize;
+                stockLabels[i].fontSize = StockSlotFontSize;
+                stockLabels[i].enableAutoSizing = false;
+                stockLabels[i].alignment = TextAlignmentOptions.Center;
+                stockSlots[i].gameObject.SetActive(false);
+            }
+
+            storageLabel.gameObject.SetActive(false);
         }
 
 
@@ -107,6 +142,7 @@ namespace RotWorld
                         // 외형 조합 비용을 매 프레임 반복하지 않도록 선택 시 한 번만 상단 계산
                         selectedTop = mapView.GetBuildingVisualTop(selectedBuilding);
                         displayedCount = -1;
+                        displayedStockVersion = -1;
                     }
                 }
             }
@@ -117,28 +153,108 @@ namespace RotWorld
                 return;
             }
 
-            // 선택 변경 또는 인원 변동 시에만 텍스트와 패널 크기 갱신
+            // 선택 변경 또는 인원·재고 변동 시에만 텍스트와 패널 크기 갱신
             int count = mapView.Map.Occupancy.GetCount(selectedBuilding);
+            int stockVersion = selectedBuilding.StockVersion;
 
-            if (count != displayedCount)
+            if (count != displayedCount || stockVersion != displayedStockVersion)
             {
                 displayedCount = count;
-                RefreshName();
+                displayedStockVersion = stockVersion;
+                RefreshContent();
             }
 
             RefreshPosition();
         }
 
 
-        // 선택한 건물 이름과 인원 수의 실제 글자 크기에 맞춰 패널 크기 갱신
-        private void RefreshName()
+        // 선택한 건물 이름과 인원 수 및 주거 시설 재고의 실제 크기에 맞춰 패널 갱신
+        private void RefreshContent()
         {
-            // 선택이나 인원 변경 시에만 폰트 기준 권장 크기 계산과 좌우 및 상하 여백 추가
+            // 선택이나 인원·재고 변경 시에만 이름 줄의 폰트 기준 권장 크기 계산
             string text = selectedBuilding.Name + " [" + displayedCount + "]";
             nameLabel.text = text;
-            Vector2 textSize = nameLabel.GetPreferredValues(text);
-            panel.sizeDelta = new Vector2(Mathf.Ceil(textSize.x) + HorizontalPadding * 2f,
-                Mathf.Ceil(textSize.y) + VerticalPadding * 2f);
+            Vector2 nameSize = nameLabel.GetPreferredValues(text);
+            float width = Mathf.Ceil(nameSize.x) + HorizontalPadding * 2f;
+            float height = Mathf.Ceil(nameSize.y) + VerticalPadding * 2f;
+            nameLabel.rectTransform.sizeDelta = new Vector2(-HorizontalPadding * 2f, Mathf.Ceil(nameSize.y));
+
+            // 재고가 남은 주거 시설만 보관량 줄과 재고 칸 표시
+            var stock = selectedBuilding.Stock;
+            bool showsStock = BuildingCatalog.IsResidential(selectedBuilding.Type) && selectedBuilding.TotalStockCount > 0;
+            int slotCount = 0;
+            storageLabel.gameObject.SetActive(showsStock);
+
+            if (showsStock)
+            {
+                // 이름 아래에 음식·음료 보관량과 용량 표시
+                string storage = "보관 " + selectedBuilding.StoredSupplyCount + " / " + selectedBuilding.StorageCapacity;
+                storageLabel.text = storage;
+                Vector2 storageSize = storageLabel.GetPreferredValues(storage);
+                PlaceTopRow(storageLabel.rectTransform, height, Mathf.Ceil(storageSize.y));
+                width = Mathf.Max(width, Mathf.Ceil(storageSize.x) + HorizontalPadding * 2f);
+                height += Mathf.Ceil(storageSize.y) + VerticalPadding;
+
+                // 재고가 있는 아이템 종류만 카탈로그 순서로 칸 내용 갱신
+                for (int i = 0; i < stockSlots.Length && i < stock.Count; i++)
+                {
+                    if (stock[i] > 0)
+                    {
+                        stockLabels[slotCount].text = ItemCatalog.All[i].Name + "\n" + stock[i];
+                        slotCount++;
+                    }
+                }
+            }
+
+            // 사용한 칸만 활성화하고 남은 칸은 숨김
+            for (int i = 0; i < stockSlots.Length; i++)
+            {
+                stockSlots[i].gameObject.SetActive(i < slotCount);
+            }
+
+            // 인간 소지품 칸과 같은 열 수로 재고 칸을 가운데 정렬
+            if (slotCount > 0)
+            {
+                int columns = Mathf.Min(slotCount, HumanNeedsPanel.SlotColumns);
+                int rows = (slotCount + HumanNeedsPanel.SlotColumns - 1) / HumanNeedsPanel.SlotColumns;
+                float step = HumanNeedsPanel.SlotSize + HumanNeedsPanel.SlotGap;
+                float gridWidth = columns * step - HumanNeedsPanel.SlotGap;
+                width = Mathf.Max(width, gridWidth + HorizontalPadding * 2f);
+                float left = (width - gridWidth) * .5f;
+
+                for (int i = 0; i < slotCount; i++)
+                {
+                    stockSlots[i].anchoredPosition = new Vector2(left + i % HumanNeedsPanel.SlotColumns * step,
+                        -height - i / HumanNeedsPanel.SlotColumns * step);
+                }
+
+                height += rows * step - HumanNeedsPanel.SlotGap + VerticalPadding;
+            }
+
+            panel.sizeDelta = new Vector2(width, height);
+        }
+
+
+        // 고정 크기 글자와 줄바꿈 없는 가운데 정렬 적용
+        private static void ConfigureLabel(TMP_Text label, float fontSize)
+        {
+            // 패널 폭 계산에 권장 크기를 쓰도록 자동 크기 조절 비활성화
+            label.fontSize = fontSize;
+            label.enableAutoSizing = false;
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.alignment = TextAlignmentOptions.Center;
+        }
+
+
+        // 패널 상단에서 지정 거리만큼 내려온 좌우 여백 포함 한 줄 배치
+        private static void PlaceTopRow(RectTransform row, float top, float height)
+        {
+            // 패널 폭을 따라 늘어나는 상단 기준 줄 영역
+            row.anchorMin = new Vector2(0f, 1f);
+            row.anchorMax = Vector2.one;
+            row.pivot = new Vector2(.5f, 1f);
+            row.anchoredPosition = new Vector2(0f, -top);
+            row.sizeDelta = new Vector2(-HorizontalPadding * 2f, height);
         }
 
 

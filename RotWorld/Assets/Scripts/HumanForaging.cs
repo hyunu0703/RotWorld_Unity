@@ -4,13 +4,17 @@ using System.Collections.Generic;
 namespace RotWorld
 {
     /// <summary>
-    /// 인간별 방문 건물 재고 기억과 음식·음료 섭취 및 파밍 규칙
+    /// 인간별 방문 건물 재고 기억과 음식·음료 섭취 및 파밍·정착지 저장 규칙
     /// </summary>
     internal sealed class HumanForaging
     {
-        // 섭취와 파밍 판단 기준 수치
-        internal const double NeedThreshold = 40d;
+        // 건물 재고 섭취·파밍 시작과 소지품 비상 섭취 및 파밍 종료 기준 수치
+        internal const double NeedThreshold = 60d;
+        internal const double EmergencyThreshold = 40d;
         internal const double SatisfiedThreshold = 80d;
+
+        // 정착 인원 1명당 정착지 저장 용량 대비 비축 목표 비율
+        private const double ReservePerSettlerRatio = .5d;
 
         // 소유 인간의 생존 수치와 소지품
         private readonly HumanNeeds needs;
@@ -28,12 +32,65 @@ namespace RotWorld
         }
 
 
-        // 허기 또는 갈증이 섭취 기준 이하인지 조회
+        // 허기 또는 갈증이 건물 재고 섭취·파밍 기준 이하인지 조회
         internal bool NeedsSupplies => needs.Hunger <= NeedThreshold || needs.Thirst <= NeedThreshold;
 
-        // 두 수치와 소지품 비축이 파밍 종료 기준을 만족하는지 조회
-        internal bool IsSatisfied => needs.Hunger >= SatisfiedThreshold && needs.Thirst >= SatisfiedThreshold &&
-            HasCarriedItem(true) && HasCarriedItem(false);
+        // 허기 또는 갈증이 소지품 비상 섭취 기준 이하인지 조회
+        private bool NeedsEmergency => needs.Hunger <= EmergencyThreshold || needs.Thirst <= EmergencyThreshold;
+
+        // 두 수치가 파밍 종료 기준 이상인지 조회
+        internal bool IsFed => needs.Hunger >= SatisfiedThreshold && needs.Thirst >= SatisfiedThreshold;
+
+        // 정착지가 없는 인간의 두 수치와 소지품 비축이 파밍 종료 기준을 만족하는지 조회
+        internal bool IsSatisfied => IsFed && HasCarriedItem(true) && HasCarriedItem(false);
+
+        // 소지 칸이 모두 찼는지 조회
+        internal bool IsInventoryFull => inventory.Count >= inventory.Capacity;
+
+
+        // 소지품의 음식·음료 개수 조회
+        internal int CarriedSupplyCount
+        {
+            get
+            {
+                // 가방 등 장비 제외
+                int count = 0;
+
+                for (int i = 0; i < inventory.Capacity; i++)
+                {
+                    var item = inventory.Slots[i];
+
+                    if (item != null && item.IsSupply)
+                    {
+                        count++;
+                    }
+                }
+
+                return count;
+            }
+        }
+
+
+        // 정착 인원과 저장 용량 기준 정착지 비축 목표 조회
+        internal static int GetReserveTarget(CityBuilding settlement)
+        {
+            // 1인당 용량 절반을 올림한 뒤 인원수만큼 늘리고 용량을 넘기지 않음
+            if (settlement == null)
+            {
+                throw new ArgumentNullException(nameof(settlement));
+            }
+
+            int perSettler = (int)Math.Ceiling(settlement.StorageCapacity * ReservePerSettlerRatio);
+            return Math.Min(settlement.StorageCapacity, perSettler * settlement.SettlerCount);
+        }
+
+
+        // 정착지 재고와 자기 소지품의 음식·음료가 비축 목표 이상인지 조회
+        internal bool HasEnoughReserve(CityBuilding settlement)
+        {
+            // 정착지 재고 합계와 소지품 합계를 함께 비교
+            return settlement.StoredSupplyCount + CarriedSupplyCount >= GetReserveTarget(settlement);
+        }
 
 
         // 기억상 부족한 수치를 채울 아이템이 남아 있거나 아직 들어가 보지 않은 건물인지 조회
@@ -53,7 +110,7 @@ namespace RotWorld
             {
                 var item = ItemCatalog.All[i];
 
-                if (stock[i] > 0 && IsSupply(item) && ((!lacksHunger && !lacksThirst) ||
+                if (stock[i] > 0 && item.IsSupply && ((!lacksHunger && !lacksThirst) ||
                     (lacksHunger && item.HungerRecovery > 0) || (lacksThirst && item.ThirstRecovery > 0)))
                 {
                     return true;
@@ -64,17 +121,17 @@ namespace RotWorld
         }
 
 
-        // 섭취 기준 이하인 수치만 더 낮은 쪽부터 소지품으로 채움
+        // 비상 섭취 기준 이하인 수치만 더 낮은 쪽부터 소지품으로 채움
         internal void EatFromInventory()
         {
-            // 기준을 넘거나 쓸 수 있는 소지품이 없을 때까지 한 개씩 사용
-            while (NeedsSupplies)
+            // 소지품은 비상용이므로 비상 기준을 넘거나 쓸 수 있는 소지품이 없을 때까지 한 개씩 사용
+            while (NeedsEmergency)
             {
                 bool isHungerLower = IsHungerLower();
                 int slot = FindInventorySlot(isHungerLower);
 
-                // 낮은 쪽을 채울 아이템이 없으면 다른 쪽도 기준 이하일 때만 사용
-                if (slot < 0 && (isHungerLower ? needs.Thirst : needs.Hunger) <= NeedThreshold)
+                // 낮은 쪽을 채울 아이템이 없으면 다른 쪽도 비상 기준 이하일 때만 사용
+                if (slot < 0 && (isHungerLower ? needs.Thirst : needs.Hunger) <= EmergencyThreshold)
                 {
                     slot = FindInventorySlot(!isHungerLower);
                 }
@@ -113,17 +170,58 @@ namespace RotWorld
         }
 
 
+        // 귀환한 정착지 재고에 비상분을 뺀 소지품 음식·음료 저장
+        internal void Store(CityBuilding settlement)
+        {
+            // 정착지 누락 차단
+            if (settlement == null)
+            {
+                throw new ArgumentNullException(nameof(settlement));
+            }
+
+            // 회복량이 큰 허기용과 갈증용 한 칸씩 비상분으로 남김
+            int keepHunger = FindBestCarriedSlot(true, -1);
+            int keepThirst = FindBestCarriedSlot(false, keepHunger);
+
+            for (int i = 0; i < inventory.Capacity; i++)
+            {
+                var item = inventory.Slots[i];
+
+                if (i == keepHunger || i == keepThirst || item == null || !item.IsSupply)
+                {
+                    continue;
+                }
+
+                // 용량이 차면 중단하고 남은 아이템은 계속 소지
+                if (!settlement.TryStore(FindItemIndex(item)))
+                {
+                    break;
+                }
+
+                inventory.TryRemove(i);
+            }
+
+            // 저장 후 정착지 재고를 기억에 반영
+            Remember(settlement);
+        }
+
+
         // 현재 재고를 기억 스냅샷으로 저장
         internal void Remember(CityBuilding building)
         {
             // 기존 배열을 재사용해 반복 방문 시 할당 감소
+            var source = building.Stock;
+
             if (!memory.TryGetValue(building, out int[] stock))
             {
-                stock = new int[building.Stock.Length];
+                stock = new int[source.Count];
                 memory.Add(building, stock);
             }
 
-            Array.Copy(building.Stock, stock, stock.Length);
+            for (int i = 0; i < stock.Length; i++)
+            {
+                stock[i] = source[i];
+            }
         }
 
 
@@ -146,7 +244,7 @@ namespace RotWorld
                     return;
                 }
 
-                building.Stock[index]--;
+                building.TryTake(index);
             }
         }
 
@@ -159,7 +257,7 @@ namespace RotWorld
 
             if (inventory.EquippedBag == null && bagIndex >= 0 && building.Stock[bagIndex] > 0 && inventory.TryEquip(ItemCatalog.Bag))
             {
-                building.Stock[bagIndex]--;
+                building.TryTake(bagIndex);
             }
 
             // 현재 수치와 소지 회복량의 합이 낮은 쪽 아이템부터 한 칸씩 보충
@@ -178,7 +276,7 @@ namespace RotWorld
                     return;
                 }
 
-                building.Stock[index]--;
+                building.TryTake(index);
             }
         }
 
@@ -191,12 +289,12 @@ namespace RotWorld
             int best = -1;
             int bestRecovery = 0;
 
-            for (int i = 0; i < building.Stock.Length && i < ItemCatalog.All.Count; i++)
+            for (int i = 0; i < building.Stock.Count && i < ItemCatalog.All.Count; i++)
             {
                 var item = ItemCatalog.All[i];
                 int recovery = GetRecovery(item, hunger);
 
-                if (building.Stock[i] <= 0 || !IsSupply(item) || recovery <= 0 || (mustFit && recovery > room) || recovery <= bestRecovery)
+                if (building.Stock[i] <= 0 || !item.IsSupply || recovery <= 0 || (mustFit && recovery > room) || recovery <= bestRecovery)
                 {
                     continue;
                 }
@@ -224,7 +322,7 @@ namespace RotWorld
                 var item = inventory.Slots[i];
                 int recovery = item == null ? 0 : GetRecovery(item, hunger);
 
-                if (recovery <= 0 || !IsSupply(item))
+                if (recovery <= 0 || !item.IsSupply)
                 {
                     continue;
                 }
@@ -254,13 +352,36 @@ namespace RotWorld
             {
                 var item = inventory.Slots[i];
 
-                if (item != null && IsSupply(item) && GetRecovery(item, hunger) > 0)
+                if (item != null && item.IsSupply && GetRecovery(item, hunger) > 0)
                 {
                     return true;
                 }
             }
 
             return false;
+        }
+
+
+        // 비상분으로 남길 지정 수치 회복량이 가장 큰 소지 칸 조회
+        private int FindBestCarriedSlot(bool hunger, int excludedSlot)
+        {
+            // 이미 다른 비상분으로 고른 칸은 제외
+            int best = -1;
+            int bestRecovery = 0;
+
+            for (int i = 0; i < inventory.Capacity; i++)
+            {
+                var item = inventory.Slots[i];
+                int recovery = item == null || i == excludedSlot || !item.IsSupply ? 0 : GetRecovery(item, hunger);
+
+                if (recovery > bestRecovery)
+                {
+                    best = i;
+                    bestRecovery = recovery;
+                }
+            }
+
+            return best;
         }
 
 
@@ -274,7 +395,7 @@ namespace RotWorld
             {
                 var item = inventory.Slots[i];
 
-                if (item != null && IsSupply(item))
+                if (item != null && item.IsSupply)
                 {
                     total += GetRecovery(item, hunger);
                 }
@@ -305,14 +426,6 @@ namespace RotWorld
         {
             // 허기와 갈증 회복량 중 요청 항목 반환
             return hunger ? item.HungerRecovery : item.ThirstRecovery;
-        }
-
-
-        // 허기·갈증을 채우는 음식과 음료 여부 조회
-        private static bool IsSupply(ItemDefinition item)
-        {
-            // 가방 등 장비는 섭취와 비축 대상에서 제외
-            return item.Category == ItemCategory.Food || item.Category == ItemCategory.Drink;
         }
 
 

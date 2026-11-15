@@ -19,6 +19,7 @@ namespace RotWorld
         public string Code { get; }
         public string Name { get; }
         public ItemCategory Category { get; }
+        public bool IsSupply => Category == ItemCategory.Food || Category == ItemCategory.Drink;
 
         // 사용 시 적용할 생존 수치 회복량
         public int HungerRecovery { get; }

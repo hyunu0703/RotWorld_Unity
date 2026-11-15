@@ -113,6 +113,23 @@ namespace RotWorld
         }
 
 
+        // 정착지 저장 등으로 넘긴 소지 칸의 아이템 한 개 제거
+        public bool TryRemove(int slotIndex)
+        {
+            // 잠긴 칸과 빈 칸의 제거 차단
+            if (slotIndex < 0 || slotIndex >= Capacity || slots[slotIndex] == null)
+            {
+                return false;
+            }
+
+            // 선택 칸을 비운 뒤 표시 변경 기록
+            slots[slotIndex] = null;
+            Count--;
+            Version++;
+            return true;
+        }
+
+
         // 소지품을 보존할 수 있을 때 가방 해제
         public bool TryUnequipBag()
         {

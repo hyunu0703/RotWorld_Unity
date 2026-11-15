@@ -55,7 +55,7 @@ namespace RotWorld
     }
 
     /// <summary>
-    /// 건물 영역과 출입구 및 실제 아이템 재고 보관
+    /// 건물 영역과 출입구 및 실제 아이템 재고와 정착지 저장 용량 보관
     /// </summary>
     public sealed class CityBuilding
     {
@@ -63,21 +63,152 @@ namespace RotWorld
         public RectInt Bounds { get; }
         public Vector2Int Door { get; }
 
-        // 기존 외형 분류와 독립적인 건물 종류 및 ItemCatalog.All 순서의 아이템 재고
+        // 기존 외형 분류와 독립적인 건물 종류
         public int Kind { get; }
         public BuildingType Type { get; }
         public string Name => BuildingCatalog.GetName(Type);
-        public int[] Stock { get; }
 
-        // 생성된 필지와 재고 연결
-        public CityBuilding(RectInt bounds, Vector2Int door, int kind, int[] stock, BuildingType type = BuildingType.Unspecified)
+        // ItemCatalog.All 순서의 아이템 재고와 UI 갱신용 변경 버전
+        private readonly int[] stock;
+        public IReadOnlyList<int> Stock { get; }
+        public int StockVersion { get; private set; }
+
+        // 주거 시설의 음식·음료 저장 한도와 이 건물을 정착지로 둔 인간 수
+        public int StorageCapacity { get; }
+        public int SettlerCount { get; private set; }
+
+        // 생성된 필지와 재고 및 저장 용량 연결
+        public CityBuilding(RectInt bounds, Vector2Int door, int kind, int[] stock, BuildingType type = BuildingType.Unspecified,
+            int storageCapacity = 0)
         {
-            // 생성 결과의 필지와 출입구 및 재고 참조 보관
+            // 재고 배열 누락과 음수 용량 차단
+            if (stock == null)
+            {
+                throw new ArgumentNullException(nameof(stock));
+            }
+
+            if (storageCapacity < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(storageCapacity));
+            }
+
+            // 생성 결과의 필지와 출입구 및 외부 수정 방지 재고 목록 보관
             Bounds = bounds;
             Door = door;
             Kind = kind;
             Type = type;
-            Stock = stock;
+            this.stock = stock;
+            Stock = Array.AsReadOnly(stock);
+            StorageCapacity = storageCapacity;
+        }
+
+
+        // 저장된 음식·음료 개수 조회
+        public int StoredSupplyCount
+        {
+            get
+            {
+                // 가방 등 장비는 저장 용량 계산에서 제외
+                int count = 0;
+
+                for (int i = 0; i < stock.Length && i < ItemCatalog.All.Count; i++)
+                {
+                    if (ItemCatalog.All[i].IsSupply)
+                    {
+                        count += stock[i];
+                    }
+                }
+
+                return count;
+            }
+        }
+
+
+        // 재고에 남은 아이템 총 개수 조회
+        public int TotalStockCount
+        {
+            get
+            {
+                // 표시 여부 판단용으로 장비까지 합산
+                int count = 0;
+
+                foreach (int amount in stock)
+                {
+                    count += amount;
+                }
+
+                return count;
+            }
+        }
+
+
+        // 출입구만 바꾼 같은 건물 생성
+        internal CityBuilding WithDoor(Vector2Int door)
+        {
+            // 출입 통로 확보 결과 반영 시 재고와 용량 유지
+            return new CityBuilding(Bounds, door, Kind, stock, Type, StorageCapacity);
+        }
+
+
+        // 종류만 바꾼 같은 건물 생성
+        internal CityBuilding WithType(BuildingType type)
+        {
+            // 종류 배정 결과 반영 시 재고와 용량 유지
+            return new CityBuilding(Bounds, Door, Kind, stock, type, StorageCapacity);
+        }
+
+
+        // 재고에서 아이템 한 개 차감
+        internal bool TryTake(int itemIndex)
+        {
+            // 범위 밖 인덱스와 빈 재고 차단
+            if (itemIndex < 0 || itemIndex >= stock.Length || stock[itemIndex] <= 0)
+            {
+                return false;
+            }
+
+            // 섭취와 파밍으로 줄어든 재고를 UI에 알릴 버전 증가
+            stock[itemIndex]--;
+            StockVersion++;
+            return true;
+        }
+
+
+        // 저장 용량 안에서 음식·음료 한 개 보관
+        internal bool TryStore(int itemIndex)
+        {
+            // 범위 밖 인덱스와 음식·음료 외 아이템 및 용량 초과 차단
+            if (itemIndex < 0 || itemIndex >= stock.Length || itemIndex >= ItemCatalog.All.Count ||
+                !ItemCatalog.All[itemIndex].IsSupply || StoredSupplyCount >= StorageCapacity)
+            {
+                return false;
+            }
+
+            // 귀환 인간이 맡긴 아이템을 UI에 알릴 버전 증가
+            stock[itemIndex]++;
+            StockVersion++;
+            return true;
+        }
+
+
+        // 이 건물을 정착지로 확정한 인간 추가
+        internal void AddSettler()
+        {
+            // 비축 목표 계산에 사용할 정착 인원 증가
+            SettlerCount++;
+        }
+
+
+        // 이 건물을 정착지에서 해제한 인간 제거
+        internal void RemoveSettler()
+        {
+            // 짝이 맞지 않는 해제 호출로 음수가 되는 상황 차단
+            if (SettlerCount <= 0)
+            {
+                throw new InvalidOperationException("정착 인원 해제 호출 불일치");
+            }
+
+            SettlerCount--;
         }
     }
 

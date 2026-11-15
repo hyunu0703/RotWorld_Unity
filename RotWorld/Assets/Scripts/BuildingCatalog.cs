@@ -48,13 +48,27 @@ namespace RotWorld
     }
 
     /// <summary>
-    /// 구역별 건물 종류 배정과 한국어 표시 이름 제공
+    /// 구역별 건물 종류 배정과 한국어 표시 이름 및 주거 시설 저장 용량 제공
     /// </summary>
     public static class BuildingCatalog
     {
         // 다른 생성 난수 흐름을 소비하지 않는 지역별 시작점 해시
         private const uint SeedHashMultiplier = 73856093u;
         private const uint RegionHashMultiplier = 19349663u;
+
+        // 정착지 저장 용량의 필지 크기 보정 범위
+        private const float MinimumStorageScale = .75f;
+        private const float StorageScaleRange = .5f;
+        private const float NeutralSizeRatio = .5f;
+
+        // 주거 시설 종류별 정착지 저장 기본 용량
+        private const int CabinStorage = 15;
+        private const int CountryHouseStorage = 20;
+        private const int DetachedHouseStorage = 25;
+        private const int RiversideHouseStorage = 25;
+        private const int VillaStorage = 30;
+        private const int StaffDormitoryStorage = 40;
+        private const int ApartmentStorage = 50;
 
         // 소규모 생활권 구성 기준과 실제 바다 인접 판정 거리
         private const int SmallGroupLimit = 3;
@@ -272,8 +286,7 @@ namespace RotWorld
 
                 int buildingIndex = buildings[index];
                 var building = map.Buildings[buildingIndex];
-                map.Buildings[buildingIndex] = new CityBuilding(building.Bounds, building.Door,
-                    building.Kind, building.Stock, assigned[index]);
+                map.Buildings[buildingIndex] = building.WithType(assigned[index]);
             }
         }
 
@@ -517,6 +530,51 @@ namespace RotWorld
                     return true;
                 default:
                     return false;
+            }
+        }
+
+
+        // 주거 시설 기본값과 필지 크기 보정으로 정착지 저장 용량 계산
+        public static int GetStorageCapacity(BuildingType type, int area, int minimumArea, int maximumArea)
+        {
+            // 주거 시설이 아니면 저장 용량 없음
+            int baseCapacity = GetStorageBase(type);
+
+            if (baseCapacity == 0)
+            {
+                return 0;
+            }
+
+            // 지역 최소·최대 면적 사이 위치를 0~1로 제한하고 범위가 없는 고정 규격은 중간값 사용
+            float ratio = maximumArea > minimumArea
+                ? Mathf.Clamp01((area - minimumArea) / (float)(maximumArea - minimumArea)) : NeutralSizeRatio;
+            float scale = MinimumStorageScale + StorageScaleRange * ratio;
+            return Math.Max(1, Mathf.RoundToInt(baseCapacity * scale));
+        }
+
+
+        // 주거 시설 종류별 정착지 저장 기본 용량 조회
+        private static int GetStorageBase(BuildingType type)
+        {
+            // 주거 시설 일곱 종류 외에는 0
+            switch (type)
+            {
+                case BuildingType.Cabin:
+                    return CabinStorage;
+                case BuildingType.CountryHouse:
+                    return CountryHouseStorage;
+                case BuildingType.DetachedHouse:
+                    return DetachedHouseStorage;
+                case BuildingType.RiversideHouse:
+                    return RiversideHouseStorage;
+                case BuildingType.Villa:
+                    return VillaStorage;
+                case BuildingType.StaffDormitory:
+                    return StaffDormitoryStorage;
+                case BuildingType.Apartment:
+                    return ApartmentStorage;
+                default:
+                    return 0;
             }
         }
     }

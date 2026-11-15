@@ -1501,7 +1501,9 @@ namespace RotWorld
             ReleaseCooperativeAttack();
             ClearSurvivalMovement();
 
+            // 쓰러진 인간은 정착 인원에서 제외
             Needs.Freeze();
+            brain.ReleaseSettlement();
             isStarved = starved;
 
             // 쓰러진 인간의 이동 예약과 타일 점유 및 실제 충돌 좌표 반환
@@ -2529,6 +2531,12 @@ namespace RotWorld
                 if (Needs != null)
                 {
                     Needs.Freeze();
+                }
+
+                // 제거되는 인간의 정착 인원 반환
+                if (brain != null)
+                {
+                    brain.ReleaseSettlement();
                 }
 
                 if (isZombie)

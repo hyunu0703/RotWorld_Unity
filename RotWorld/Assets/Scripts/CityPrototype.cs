@@ -716,7 +716,7 @@ namespace RotWorld
         }
 
 
-        // 기존 폰트와 색상을 사용하는 건물 이름 패널 구성
+        // 기존 폰트와 색상을 사용하는 건물 이름과 재고 패널 구성
         private void BuildBuildingInfoPanel(RectTransform canvasRect)
         {
             // 건물 상단 중앙에 연결할 하단 중심 기준의 이름 패널 구성
@@ -725,7 +725,23 @@ namespace RotWorld
             Background(panel, PanelColor).raycastTarget = false;
             var label = Label(panel, "", Vector2.zero, Vector2.zero);
             label.alignment = TextAlignmentOptions.Center;
-            buildingInfoPanel = new BuildingInfoPanel(mapView, worldCamera, canvasRect, panel, label);
+
+            // 주거 시설 보관량 줄과 인간 소지품 칸 모양의 읽기 전용 재고 칸 구성
+            var storageLabel = Label(panel, "", Vector2.zero, Vector2.zero);
+            var stockSlots = new RectTransform[ItemCatalog.All.Count];
+            var stockLabels = new TMP_Text[stockSlots.Length];
+
+            for (int i = 0; i < stockSlots.Length; i++)
+            {
+                var slot = Rect("Stock Slot", panel, new Vector2(0f, 1f), new Vector2(0f, 1f), Vector2.zero,
+                    Vector2.one * HumanNeedsPanel.SlotSize);
+                Background(slot, ControlColor).raycastTarget = false;
+                stockSlots[i] = slot;
+                stockLabels[i] = Label(slot, "", Vector2.zero, Vector2.one * HumanNeedsPanel.SlotSize);
+            }
+
+            buildingInfoPanel = new BuildingInfoPanel(mapView, worldCamera, canvasRect, panel, label, storageLabel,
+                stockSlots, stockLabels);
             panel.gameObject.SetActive(false);
         }
 

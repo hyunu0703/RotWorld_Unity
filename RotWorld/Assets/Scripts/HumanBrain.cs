@@ -5,7 +5,7 @@ using UnityEngine;
 namespace RotWorld
 {
     /// <summary>
-    /// 인간의 정착·파밍·귀환·이주 목표 판단과 건물 내부 체류 결정
+    /// 인간의 정착·파밍·비축·귀환·이주 목표 판단과 건물 내부 체류 결정
     /// </summary>
     internal sealed class HumanBrain
     {
@@ -61,23 +61,28 @@ namespace RotWorld
         }
 
 
-        // 섭취 기준 이하일 때 소지품 우선 섭취
+        // 건물 밖에서 비상 기준 이하일 때 소지품 섭취
         internal void EatFromInventory()
         {
-            // 소지품으로 해결하지 못하면 파밍 진행 상태로 전환
+            // 소지품은 비상용이므로 탐색 기준 이하이면 섭취와 무관하게 파밍 진행 상태로 전환
             foraging.EatFromInventory();
             RefreshForaging();
         }
 
 
-        // 퇴장 대기 중 소지품과 현재 건물 재고 순으로 섭취
+        // 퇴장 대기 중 현재 건물 재고와 비상 소지품 순으로 섭취
         internal void EatInside(CityBuilding building)
         {
             // 출입구가 막혀 기다리는 동안에도 아사 방지 섭취 유지
-            foraging.EatFromInventory();
-            foraging.EatFromStockIfNeeded(building);
-            foraging.Remember(building);
-            RefreshForaging();
+            EatInBuilding(building);
+        }
+
+
+        // 정착지 해제와 정착 인원 반환
+        internal void ReleaseSettlement()
+        {
+            // 쓰러짐·변환·제거 시 남은 정착 인원 기록 정리
+            SetSettlement(null);
         }
 
 
@@ -102,7 +107,8 @@ namespace RotWorld
             switch (goal)
             {
                 case Goal.Forage:
-                    Target = FindForageTarget(position);
+                    // 탐색 기준 이하이고 정착지에 쓸 재고가 남아 있으면 이번 파밍에서 한 번은 정착지부터 확인
+                    Target = ShouldEatAtSettlement() ? Settlement : FindForageTarget(position);
 
                     // 후보가 없으면 방문 기록을 비우고 정착지 또는 새 주거 시설에서 대기 후 재탐색
                     if (Target == null)
@@ -141,9 +147,10 @@ namespace RotWorld
 
             dangerUntil[building] = Time.time + DangerMemoryDuration;
 
+            // 버린 정착지의 재고는 그대로 두고 정착 인원만 반환
             if (Settlement == building)
             {
-                Settlement = null;
+                SetSettlement(null);
             }
 
             if (Target == building)
@@ -176,7 +183,7 @@ namespace RotWorld
 
             if (!isHiding && Settlement == null && BuildingCatalog.IsResidential(building.Type) && building == Target)
             {
-                Settlement = building;
+                SetSettlement(building);
                 abandonedThreat = null;
             }
 
@@ -184,20 +191,23 @@ namespace RotWorld
             {
                 Target = null;
             }
+
+            // 정착지에 들어오면 비상분을 뺀 소지품 음식·음료를 재고로 저장
+            if (building == Settlement)
+            {
+                foraging.Store(building);
+            }
         }
 
 
         // 건물 내부 체류 판단과 섭취 후 퇴장 희망 여부 반환
         internal bool UpdateInside(CityBuilding building, double gameSeconds, int zombiesInView, Vector2 zombieCenter)
         {
-            // 체류 시간 누적 후 소지품과 현재 건물 재고 순으로 섭취하고 들어와 본 재고 기억
+            // 체류 시간 누적 후 현재 건물 재고와 비상 소지품 순으로 섭취하고 들어와 본 재고 기억
             stayElapsed += gameSeconds;
-            foraging.EatFromInventory();
-            foraging.EatFromStockIfNeeded(building);
-            foraging.Remember(building);
-            RefreshForaging();
+            EatInBuilding(building);
 
-            // 정착지는 좀비가 많으면 버리고 섭취로 해결하지 못하면 파밍 출발
+            // 정착지는 좀비가 많으면 버리고 섭취로 해결하지 못하거나 비축이 부족하면 파밍 출발
             if (building == Settlement)
             {
                 if (zombiesInView >= AbandonZombieCount)
@@ -207,10 +217,22 @@ namespace RotWorld
                     return true;
                 }
 
+                // 배고프지 않아도 정착지 재고와 소지품이 비축 목표보다 적으면 비축 파밍 시작
+                if (!isForaging && !foraging.HasEnoughReserve(building))
+                {
+                    isForaging = true;
+                }
+
                 // 파밍 후보가 소진된 경우 체류 시간만큼 쉬고 다시 출발
                 if (isForaging && isForageExhausted && stayElapsed < ForageStaySeconds)
                 {
                     return false;
+                }
+
+                // 정착지 재고를 이미 확인한 파밍으로 기록해 출발 직후 정착지 재선택 방지
+                if (isForaging)
+                {
+                    tripVisited.Add(building);
                 }
 
                 isForageExhausted = false;
@@ -236,15 +258,26 @@ namespace RotWorld
         }
 
 
-        // 소지품과 수치에 따른 파밍 시작과 종료 갱신
+        // 건물 재고와 비상 소지품 순으로 섭취 후 재고 기억과 파밍 상태 갱신
+        private void EatInBuilding(CityBuilding building)
+        {
+            // 탐색 기준 이하에서 건물 재고 먼저 사용하고 비상 기준 이하일 때만 소지품 사용
+            foraging.EatFromStockIfNeeded(building);
+            foraging.EatFromInventory();
+            foraging.Remember(building);
+            RefreshForaging();
+        }
+
+
+        // 수치와 비축에 따른 파밍 시작과 종료 갱신
         private void RefreshForaging()
         {
-            // 기준 이하이면 파밍 시작, 수치와 비축이 충분하면 종료
+            // 기준 이하이면 파밍 시작, 귀환 조건을 만족하면 종료
             if (foraging.NeedsSupplies)
             {
                 isForaging = true;
             }
-            else if (isForaging && foraging.IsSatisfied)
+            else if (isForaging && IsTripComplete())
             {
                 isForaging = false;
                 isForageExhausted = false;
@@ -253,10 +286,55 @@ namespace RotWorld
         }
 
 
+        // 정착 여부에 따른 파밍 귀환 조건 조회
+        private bool IsTripComplete()
+        {
+            // 정착지가 있으면 두 수치 80 이상과 소지 칸 가득 또는 비축 목표 도달, 없으면 기존 종료 조건
+            if (Settlement == null)
+            {
+                return foraging.IsSatisfied;
+            }
+
+            return foraging.IsFed && (foraging.IsInventoryFull || foraging.HasEnoughReserve(Settlement));
+        }
+
+
+        // 정착지 교체와 건물별 정착 인원 증감
+        private void SetSettlement(CityBuilding building)
+        {
+            // 같은 정착지 재지정 시 인원 중복 증가 방지
+            if (Settlement == building)
+            {
+                return;
+            }
+
+            if (Settlement != null)
+            {
+                Settlement.RemoveSettler();
+            }
+
+            Settlement = building;
+
+            if (building != null)
+            {
+                building.AddSettler();
+            }
+        }
+
+
+        // 탐색 기준 이하에서 이번 파밍 중 확인하지 않은 정착지 재고로 먼저 귀환할지 조회
+        private bool ShouldEatAtSettlement()
+        {
+            // 비축 파밍은 정착지를 채우는 목적이므로 수치가 기준 이하일 때만 정착지 재고 사용
+            return Settlement != null && foraging.NeedsSupplies && !tripVisited.Contains(Settlement) &&
+                foraging.HasUsefulSupply(Settlement);
+        }
+
+
         // 정착지 또는 현재 위치 기준 반경을 넓혀 가며 가까운 파밍 건물 선택
         private CityBuilding FindForageTarget(Vector2 position)
         {
-            // 기억상 재고가 있거나 미방문인 위험하지 않은 건물만 후보로 사용
+            // 기억상 재고가 있거나 미방문인 위험하지 않은 건물만 후보로 사용하고 비축 대상인 자기 정착지는 제외
             Vector2 anchor = Settlement != null ? (Vector2)Settlement.Door : position;
             float radius = ForageSearchRadius;
 
@@ -270,8 +348,8 @@ namespace RotWorld
                 {
                     Vector2 door = building.Door;
 
-                    if ((door - anchor).sqrMagnitude > radiusSquared || IsDangerous(building) || tripVisited.Contains(building) ||
-                        !foraging.HasUsefulSupply(building))
+                    if (building == Settlement || (door - anchor).sqrMagnitude > radiusSquared || IsDangerous(building) ||
+                        tripVisited.Contains(building) || !foraging.HasUsefulSupply(building))
                     {
                         continue;
                     }

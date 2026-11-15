@@ -1002,19 +1002,43 @@ namespace RotWorld
         // 지역별 실제 바닥 크기 범위 선택
         private Vector2Int BuildingSize(CityRegion region, bool minimum)
         {
-            // 지역별 최소 규격 또는 난수 규격 선택
+            // 공유 규격 범위에서 최소 규격 또는 가로·세로 순서의 난수 규격 선택
+            GetSizeRange(region, out var smallest, out var limit);
+            return minimum ? smallest : new Vector2Int(layoutRandom.Next(smallest.x, limit.x), layoutRandom.Next(smallest.y, limit.y));
+        }
+
+
+        // 지역별 바닥 크기의 최소 규격과 미포함 상한 조회
+        private static void GetSizeRange(CityRegion region, out Vector2Int minimum, out Vector2Int limit)
+        {
+            // 건물 배치와 정착지 저장 용량 보정이 함께 쓰는 단일 규격표
             switch (region)
             {
                 case CityRegion.Downtown:
-                    return new Vector2Int(minimum ? 5 : layoutRandom.Next(5, 11), minimum ? 6 : layoutRandom.Next(6, 13));
+                    minimum = new Vector2Int(5, 6);
+                    limit = new Vector2Int(11, 13);
+                    break;
                 case CityRegion.Villages:
-                    return new Vector2Int(minimum ? 4 : layoutRandom.Next(4, 7), minimum ? 5 : layoutRandom.Next(5, 8));
+                    minimum = new Vector2Int(4, 5);
+                    limit = new Vector2Int(7, 8);
+                    break;
                 case CityRegion.Riverside:
-                    return new Vector2Int(minimum ? 4 : layoutRandom.Next(4, 9), minimum ? 6 : layoutRandom.Next(6, 11));
+                    minimum = new Vector2Int(4, 6);
+                    limit = new Vector2Int(9, 11);
+                    break;
                 case CityRegion.Industrial:
-                    return new Vector2Int(minimum ? 10 : layoutRandom.Next(10, 19), minimum ? 12 : layoutRandom.Next(12, 25));
+                    minimum = new Vector2Int(10, 12);
+                    limit = new Vector2Int(19, 25);
+                    break;
+                case CityRegion.Natural:
+                    // 자연 지역 피난 시설은 고정 규격
+                    minimum = new Vector2Int(4, 5);
+                    limit = new Vector2Int(5, 6);
+                    break;
                 default:
-                    return new Vector2Int(minimum ? 4 : layoutRandom.Next(4, 11), minimum ? 5 : layoutRandom.Next(5, 11));
+                    minimum = new Vector2Int(4, 5);
+                    limit = new Vector2Int(11, 11);
+                    break;
             }
         }
 
@@ -1123,8 +1147,7 @@ namespace RotWorld
             // 지도 크기에 비례한 희소 배치와 별도 난수 소비 없는 탐색 시작점
             const int TilesPerFacility = 128;
             const int FacilityGap = 4;
-            const int FacilityWidth = 4;
-            const int FacilityHeight = 5;
+            GetSizeRange(CityRegion.Natural, out var facilitySize, out _);
             const float SpacingDivisor = 8f;
             int target = Math.Max(1, mapSize / TilesPerFacility);
             int start = (int)((uint)mapData.Seed % (uint)mapData.Tiles.Length);
@@ -1144,7 +1167,7 @@ namespace RotWorld
 
                 foreach (var offset in offsets)
                 {
-                    var bounds = new RectInt(index % mapSize + offset.x, index / mapSize + offset.y, FacilityWidth, FacilityHeight);
+                    var bounds = new RectInt(index % mapSize + offset.x, index / mapSize + offset.y, facilitySize.x, facilitySize.y);
                     bool isTooClose = false;
 
                     // 같은 도로 주변의 밀집을 피하기 위한 시설 간 거리 확인
@@ -1260,7 +1283,7 @@ namespace RotWorld
         }
 
 
-        // 종류 배정이 끝난 건물 목록 순서대로 종류별 재고 생성
+        // 종류 배정이 끝난 건물 목록 순서대로 종류별 재고와 정착지 저장 용량 생성
         private void AssignStock()
         {
             // 재고 전용 난수 흐름만 사용해 지형과 종류 배정 결과 보존
@@ -1268,8 +1291,25 @@ namespace RotWorld
             {
                 var building = mapData.Buildings[b];
                 int[] stock = BuildingStockTable.Create(building.Type, stockRandom, settingsData.Supplies);
-                mapData.Buildings[b] = new CityBuilding(building.Bounds, building.Door, building.Kind, stock, building.Type);
+                int capacity = GetStorageCapacity(building);
+                mapData.Buildings[b] = new CityBuilding(building.Bounds, building.Door, building.Kind, stock, building.Type, capacity);
             }
+        }
+
+
+        // 건물이 속한 지역의 필지 규격 범위로 저장 용량 계산
+        private int GetStorageCapacity(CityBuilding building)
+        {
+            // 필지 중심 타일의 지역 규격에서 최소·최대 면적 산출
+            var center = building.Bounds.center;
+            var region = mapData.Regions[(int)center.y * mapSize + (int)center.x];
+            GetSizeRange(region, out var minimum, out var limit);
+            int minimumArea = minimum.x * minimum.y;
+            int maximumArea = (limit.x - 1) * (limit.y - 1);
+            int area = building.Bounds.width * building.Bounds.height;
+
+            // 주거 시설 외 건물은 카탈로그에서 0 반환
+            return BuildingCatalog.GetStorageCapacity(building.Type, area, minimumArea, maximumArea);
         }
 
 
@@ -1289,7 +1329,7 @@ namespace RotWorld
 
                 if (door != building.Door)
                 {
-                    mapData.Buildings[b] = new CityBuilding(bounds, door, building.Kind, building.Stock, building.Type);
+                    mapData.Buildings[b] = building.WithDoor(door);
                 }
             }
         }
