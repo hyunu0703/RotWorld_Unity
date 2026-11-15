@@ -27,9 +27,10 @@ namespace RotWorld
         private const float MinimumZoomScale = .25f;
         private const float MaximumZoomScale = 1.1f;
 
-        // 선택 건물과 지도 교체 감지
+        // 선택 건물과 지도 교체 감지 및 선택 시 계산한 외형 상단
         private CityBuilding selectedBuilding;
         private CityMap selectedMap;
+        private float selectedTop;
 
         // 기존 UI 클릭의 지도 선택 전파 차단
         private readonly PointerEventData pointer;
@@ -99,6 +100,8 @@ namespace RotWorld
 
                     if (selectedBuilding != null)
                     {
+                        // 외형 조합 비용을 매 프레임 반복하지 않도록 선택 시 한 번만 상단 계산
+                        selectedTop = mapView.GetBuildingVisualTop(selectedBuilding);
                         RefreshName();
                     }
                 }
@@ -128,9 +131,9 @@ namespace RotWorld
         // 건물 상단 중앙을 화면 좌표로 변환해 이름 패널 배치
         private void RefreshPosition()
         {
-            // 외형의 상단 경계에 맞춰 지도 부모 변환과 카메라 줌 반영
+            // 선택 시 저장한 외형 상단에 맞춰 지도 부모 변환과 카메라 줌 반영
             var bounds = selectedBuilding.Bounds;
-            var top = new Vector3(bounds.center.x, mapView.GetBuildingVisualTop(selectedBuilding), 0f);
+            var top = new Vector3(bounds.center.x, selectedTop, 0f);
             Vector3 screenPosition = worldCamera.WorldToScreenPoint(mapView.transform.TransformPoint(top));
 
             if (screenPosition.z <= 0f || !worldCamera.pixelRect.Contains(screenPosition))

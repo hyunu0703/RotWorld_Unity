@@ -162,6 +162,10 @@ namespace RotWorld
         private readonly float scale;
         private readonly Vector2Int origin;
 
+        // 이름 표시 위치용으로 담장을 제외한 실제 그림의 최고 높이 추적
+        private int visualTop;
+        private bool isDrawingFence;
+
 
         // 메쉬 조합용 기하 버퍼 준비
         private CityBuildingArt(CityArtCatalog art, CityBuilding building, int seed)
@@ -263,6 +267,23 @@ namespace RotWorld
                     pixels[py * stride + px] = new Color32(193, 180, 148, 255);
                 }
             }
+        }
+
+
+        // 담장을 제외하고 실제로 그려지는 건물 상단의 지도 y 좌표 조회
+        internal static float GetVisualTop(CityArtCatalog art, CityBuilding building, int seed)
+        {
+            // 메쉬와 같은 조합 규칙을 실행해 지붕과 굴뚝 및 옥상 설비 높이만 수집
+            var composer = new CityBuildingArt(art, building, seed);
+            composer.Compose();
+
+            // 그린 조각이 없으면 기존 필지 상단 기준으로 복귀
+            if (composer.visualTop <= 0)
+            {
+                return building.Bounds.yMax;
+            }
+
+            return building.Bounds.y + composer.visualTop / (float)TilePixels;
         }
 
 
@@ -950,13 +971,24 @@ namespace RotWorld
         // 필지 앞 블록 담장과 측면 담장 및 실제 출입 방향의 대문 배치
         private void DrawFence(Color32 tint)
         {
-            // 남북 출입은 앞뒤 담장 대문, 동서 출입은 측면 담장 틈으로 표시
+            // 담장 조각의 원본 영역과 필지 폭 및 대문 위치 준비
             var fenceSection = new RectInt(0, 8, TilePixels, FenceHeight);
             var sideSection = new RectInt(0, 0, FenceSideWidth, FenceHeight);
             int lotWidth = layout.LotWidth;
             int fenceY = layout.FenceY;
             int gateX = layout.DoorX;
 
+            // 필지 끝의 담장이 이름 표시 높이를 끌어올리지 않도록 상단 추적 제외
+            isDrawingFence = true;
+            DrawFenceParts(tint, fenceSection, sideSection, lotWidth, fenceY, gateX);
+            isDrawingFence = false;
+        }
+
+
+        // 출입 방향별 앞뒤 담장과 대문 및 측면 담장 배치
+        private void DrawFenceParts(Color32 tint, RectInt fenceSection, RectInt sideSection, int lotWidth, int fenceY, int gateX)
+        {
+            // 남북 출입은 앞뒤 담장 대문, 동서 출입은 측면 담장 틈으로 표시
             if (layout.Side == DoorSide.South || layout.Side == DoorSide.North)
             {
                 Patch(0, fenceY, gateX - GateWidth / 2, FenceHeight, CityArtCatalog.BuildingPart.BlockFence, fenceSection, tint);
@@ -1201,6 +1233,12 @@ namespace RotWorld
         // 동일한 조각 배치를 메쉬 또는 축소 지도 출력으로 전달
         private void Patch(RectInt target, CityArtCatalog.BuildingPart part, RectInt section, Color32 tint)
         {
+            // 담장을 제외한 그림 조각의 최고 높이 기록
+            if (!isDrawingFence)
+            {
+                visualTop = Mathf.Max(visualTop, target.yMax);
+            }
+
             // 출력 사각형 크기와 원본 반복 영역을 분리해 고정 이미지 확대 방지
             RectInt region = art.GetBuildingRegion(part, section);
 

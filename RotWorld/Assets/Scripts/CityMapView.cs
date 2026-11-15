@@ -572,9 +572,8 @@ namespace RotWorld
         // 건물 정보창을 새 지붕 위에 배치할 표시 상단 조회
         internal float GetBuildingVisualTop(CityBuilding building)
         {
-            // 논리 Bounds를 바꾸지 않고 제한된 외형 높이만 더하기
-            var style = terrainArt.GetBuildingStyle(mapData.Seed, building);
-            return building.Bounds.yMax + style.Height / (float)PixelsPerTile;
+            // 필지 상단이 아닌 실제 지붕과 굴뚝 등 그려진 외형의 상단 사용
+            return CityBuildingArt.GetVisualTop(terrainArt, building, mapData.Seed);
         }
 
 
