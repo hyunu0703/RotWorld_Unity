@@ -17,7 +17,8 @@ namespace RotWorld
         // 상세 보기는 원본 타일 픽셀의 정수배만 사용하고 기존 최대 확대율 48픽셀 유지
         private const int DetailZoomSteps = 3;
         private const int MaxZoom = DetailZoomSteps + OverviewTransitionSteps - 1;
-        private const int MaximumOverviewSize = 256;
+        // 모든 맵 크기의 줌 단계별 화면 배율을 중형 맵 기준으로 통일
+        private const int ReferenceMapSize = 256;
         private const int ToolbarHeightAllowance = 100;
         private const float OverviewMarginScale = 1.12f;
         private const int CameraDepth = -10;
@@ -26,7 +27,7 @@ namespace RotWorld
         // 카메라 계산 입력과 마지막 적용 상태
         private CityMap cameraMap;
         private Vector2 cameraCenter;
-        private int cameraZoom = -1;
+        private int cameraZoom = int.MinValue;
         private int cameraWidth;
         private int cameraHeight;
         private float cameraSize;
@@ -36,10 +37,9 @@ namespace RotWorld
         private CityArtCatalog terrainArt;
         private CityChunkRenderer terrainRenderer;
 
-        // 전체 보기 그래픽 자원과 픽셀 배율
-        private Texture2D overviewTexture;
-        private Sprite overviewSprite;
-        private float overviewPixelsPerUnit;
+        // 전체 보기 그래픽 자원. 0번은 타일당 1픽셀, 이후 단계마다 절반 해상도
+        private Texture2D[] overviewTextures;
+        private Sprite[] overviewSprites;
 
         // 지도 표시 컴포넌트와 현재 데이터
         private SpriteRenderer spriteRenderer;
@@ -50,7 +50,10 @@ namespace RotWorld
         // 카메라 중심과 사용자 입력 상태
         private Vector2 viewCenter;
         private int zoom = 1;
-        public float ZoomProgress => zoom / (float)MaxZoom;
+        // 중형 맵보다 큰 맵에만 생기는 추가 축소 단계 수만큼 음수
+        private int minZoom;
+        // 소환 커서 크기는 중형 맵 기준 단계로만 계산해 맵 크기와 무관하게 유지
+        public float ZoomProgress => Mathf.Max(0, zoom) / (float)MaxZoom;
         private bool isDragging;
         public bool IsInputBlocked { get; set; }
 
@@ -103,27 +106,97 @@ namespace RotWorld
                 throw new System.InvalidOperationException("지도 또는 지형 카탈로그 또는 카메라 연결 누락");
             }
 
-            int overviewSize = Mathf.Min(MaximumOverviewSize, map.Size);
-            Texture2D nextOverview = null;
-            Sprite nextOverviewSprite = null;
+            // 중형 맵보다 큰 맵은 크기가 두 배 늘 때마다 절반 해상도의 추가 축소 단계 하나 생성
+            int extraSteps = 0;
+
+            while ((map.Size >> extraSteps) > ReferenceMapSize)
+            {
+                extraSteps++;
+            }
+
+            var nextTextures = new Texture2D[extraSteps + 1];
+            var nextSprites = new Sprite[extraSteps + 1];
             CityChunkRenderer nextRenderer = null;
-            float nextPixelsPerUnit = overviewSize / (float)map.Size;
 
             try
             {
-                // 전체 지도는 최대 256픽셀로 직접 샘플링해 대형 원본 생성 제거
-                nextOverview = new Texture2D(overviewSize, overviewSize, TextureFormat.RGBA32, false);
-                nextOverview.name = "Island overview pixels";
-                nextOverview.filterMode = FilterMode.Point;
-                nextOverview.wrapMode = TextureWrapMode.Clamp;
-                var pixels = nextOverview.GetRawTextureData<Color32>();
+                for (int level = 0; level <= extraSteps; level++)
+                {
+                    nextTextures[level] = CreateOverviewTexture(map, map.Size >> level);
+                    nextSprites[level] = Sprite.Create(nextTextures[level],
+                        new Rect(0, 0, nextTextures[level].width, nextTextures[level].height), Vector2.zero,
+                        nextTextures[level].width / (float)map.Size, 0, SpriteMeshType.FullRect);
+                }
+
+                nextRenderer = new CityChunkRenderer(map, terrainArt, transform, MapSortingOrder);
+            }
+            catch
+            {
+                // 새 자원 준비 실패 시 기존 지도 유지와 부분 생성 자원 반환
+                if (nextRenderer != null)
+                {
+                    nextRenderer.Dispose();
+                }
+
+                DestroyOverviews(nextTextures, nextSprites);
+                throw;
+            }
+
+            ReleaseGraphics();
+
+            // 새 지도 교체 시 이전 지도에 소환한 표시 객체 정리
+            if (summonedUnits != null)
+            {
+                Destroy(summonedUnits.gameObject);
+            }
+
+            summonedUnits = new GameObject("Summoned Units").transform;
+            summonedUnits.SetParent(transform, false);
+            terrainRenderer = nextRenderer;
+            overviewTextures = nextTextures;
+            overviewSprites = nextSprites;
+            minZoom = -extraSteps;
+            mapData = map;
+
+            // 초기 인구도 소환 유닛과 같은 정밀도와 공용 아이콘으로 표시
+            for (int i = 0; i < map.Humans.Count; i++)
+            {
+                CreateUnitVisual(map.Humans[i], false, i);
+            }
+
+            for (int i = 0; i < map.Zombies.Count; i++)
+            {
+                CreateUnitVisual(map.Zombies[i], true, i);
+            }
+
+            // 첫 화면은 맵 크기와 무관하게 섬 전체가 보이는 최대 축소 단계로 시작
+            viewCenter = new Vector2(map.Size / 2f, map.Size / 2f);
+            zoom = minZoom;
+            cameraZoom = int.MinValue;
+            UpdateCamera();
+        }
+
+
+        // 지정한 한 변 픽셀 수로 섬 전체를 직접 샘플링한 축소 지도 생성
+        private Texture2D CreateOverviewTexture(CityMap map, int overviewSize)
+        {
+            // 텍스처 픽셀과 지도 타일의 비율로 샘플 좌표 계산
+            float pixelsPerUnit = overviewSize / (float)map.Size;
+            var texture = new Texture2D(overviewSize, overviewSize, TextureFormat.RGBA32, false);
+            texture.name = "Island overview pixels " + overviewSize;
+            texture.filterMode = FilterMode.Point;
+            texture.wrapMode = TextureWrapMode.Clamp;
+
+            try
+            {
+                var pixels = texture.GetRawTextureData<Color32>();
 
                 for (int y = 0; y < overviewSize; y++)
                 {
                     for (int x = 0; x < overviewSize; x++)
                     {
-                        float worldX = (x + .5f) / nextPixelsPerUnit;
-                        float worldY = (y + .5f) / nextPixelsPerUnit;
+                        float worldX = (x + .5f) / pixelsPerUnit;
+                        float worldY = (y + .5f) / pixelsPerUnit;
                         int tileX = (int)worldX;
                         int tileY = (int)worldY;
                         int index = tileY * map.Size + tileX;
@@ -140,65 +213,44 @@ namespace RotWorld
                     }
                 }
 
-                CityBuildingArt.PaintOverview(map, terrainArt, pixels, overviewSize, nextPixelsPerUnit);
-
-                nextOverview.Apply(false, true);
-                nextOverviewSprite = Sprite.Create(nextOverview, new Rect(0, 0, overviewSize, overviewSize),
-                    Vector2.zero, nextPixelsPerUnit, 0, SpriteMeshType.FullRect);
-                nextRenderer = new CityChunkRenderer(map, terrainArt, transform, MapSortingOrder);
+                CityBuildingArt.PaintOverview(map, terrainArt, pixels, overviewSize, pixelsPerUnit);
+                texture.Apply(false, true);
+                return texture;
             }
             catch
             {
-                // 새 자원 준비 실패 시 기존 지도 유지와 부분 생성 자원 반환
-                if (nextRenderer != null)
-                {
-                    nextRenderer.Dispose();
-                }
-
-                if (nextOverviewSprite != null)
-                {
-                    Destroy(nextOverviewSprite);
-                }
-
-                if (nextOverview != null)
-                {
-                    Destroy(nextOverview);
-                }
-
+                // 생성 도중 실패한 텍스처를 호출자에게 넘기지 않고 즉시 반환
+                Destroy(texture);
                 throw;
             }
+        }
 
-            ReleaseGraphics();
 
-            // 새 지도 교체 시 이전 지도에 소환한 표시 객체 정리
-            if (summonedUnits != null)
+        // 축소 지도 단계별 스프라이트와 텍스처 해제
+        private void DestroyOverviews(Texture2D[] textures, Sprite[] sprites)
+        {
+            // 일부만 생성된 배열도 처리하도록 빈 항목 건너뜀
+            if (sprites != null)
             {
-                Destroy(summonedUnits.gameObject);
+                foreach (var sprite in sprites)
+                {
+                    if (sprite != null)
+                    {
+                        Destroy(sprite);
+                    }
+                }
             }
 
-            summonedUnits = new GameObject("Summoned Units").transform;
-            summonedUnits.SetParent(transform, false);
-            terrainRenderer = nextRenderer;
-            overviewTexture = nextOverview;
-            overviewSprite = nextOverviewSprite;
-            overviewPixelsPerUnit = nextPixelsPerUnit;
-            mapData = map;
-
-            // 초기 인구도 소환 유닛과 같은 정밀도와 공용 아이콘으로 표시
-            for (int i = 0; i < map.Humans.Count; i++)
+            if (textures != null)
             {
-                CreateUnitVisual(map.Humans[i], false, i);
+                foreach (var texture in textures)
+                {
+                    if (texture != null)
+                    {
+                        Destroy(texture);
+                    }
+                }
             }
-
-            for (int i = 0; i < map.Zombies.Count; i++)
-            {
-                CreateUnitVisual(map.Zombies[i], true, i);
-            }
-
-            viewCenter = new Vector2(map.Size / 2f, map.Size / 2f);
-            zoom = 0;
-            cameraZoom = -1;
-            UpdateCamera();
         }
 
 
@@ -253,7 +305,7 @@ namespace RotWorld
         public void ChangeZoom(int delta)
         {
             // 지원 배율 범위로 보정한 뒤 카메라 갱신
-            zoom = Mathf.Clamp(zoom + delta, 0, MaxZoom);
+            zoom = Mathf.Clamp(zoom + delta, minZoom, MaxZoom);
             UpdateCamera();
         }
 
@@ -294,18 +346,29 @@ namespace RotWorld
             float pixelsPerUnit = PixelsPerTile * detailZoom;
 
             // 전체 보기와 상세 원본 1배율 사이에 동일 비율의 중간 확대 단계 적용
+            // 축소 배율은 실제 맵이 아닌 중형 맵 크기로 계산해 맵 크기별 해상도 차이 제거
             if (mapData != null && zoom < OverviewTransitionSteps)
             {
                 int availableHeight = Mathf.Max(1, viewCamera.pixelHeight - ToolbarHeightAllowance);
-                int overviewScale = Mathf.Max(1, Mathf.FloorToInt(Mathf.Min(viewCamera.pixelWidth, availableHeight) / (overviewTexture.width * OverviewMarginScale)));
-                float overviewDisplayScale = overviewScale * overviewPixelsPerUnit;
-                float transitionProgress = zoom / (float)OverviewTransitionSteps;
-                pixelsPerUnit = overviewDisplayScale * Mathf.Pow(PixelsPerTile / overviewDisplayScale, transitionProgress);
-                spriteRenderer.sprite = overviewSprite;
+                int overviewScale = Mathf.Max(1, Mathf.FloorToInt(Mathf.Min(viewCamera.pixelWidth, availableHeight) / (ReferenceMapSize * OverviewMarginScale)));
+
+                if (zoom < 0)
+                {
+                    // 추가 축소 단계는 절반 해상도 지도를 같은 정수 배율로 표시해 픽셀 크기 균일 유지
+                    int level = Mathf.Min(-zoom, overviewSprites.Length - 1);
+                    pixelsPerUnit = overviewScale * overviewSprites[level].pixelsPerUnit;
+                    spriteRenderer.sprite = overviewSprites[level];
+                }
+                else
+                {
+                    float transitionProgress = zoom / (float)OverviewTransitionSteps;
+                    pixelsPerUnit = overviewScale * Mathf.Pow(PixelsPerTile / (float)overviewScale, transitionProgress);
+                    spriteRenderer.sprite = overviewSprites[0];
+                }
             }
-            else if (spriteRenderer != null)
+            else if (spriteRenderer != null && overviewSprites != null)
             {
-                spriteRenderer.sprite = overviewSprite;
+                spriteRenderer.sprite = overviewSprites[0];
             }
 
             // 현재 배율의 화면 픽셀 격자에 맞춘 카메라 크기와 중심 좌표 적용
@@ -839,17 +902,9 @@ namespace RotWorld
                 terrainRenderer = null;
             }
 
-            if (overviewSprite != null)
-            {
-                Destroy(overviewSprite);
-                overviewSprite = null;
-            }
-
-            if (overviewTexture != null)
-            {
-                Destroy(overviewTexture);
-                overviewTexture = null;
-            }
+            DestroyOverviews(overviewTextures, overviewSprites);
+            overviewTextures = null;
+            overviewSprites = null;
         }
 
 
