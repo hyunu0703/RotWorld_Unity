@@ -60,12 +60,14 @@ namespace RotWorld
         private static readonly Color32 CurbShadow = new Color32(133, 135, 127, 255);
 
         // 공용 건물 조각과 머티리얼 및 지면 깊이 정렬 규격
-        private const int BuildingAtlasRows = 8;
+        private const int BuildingAtlasRows = 16;
         private const int MaximumMapSize = 1024;
         private const int DepthStepsPerTile = 4;
         private const int DepthStride = 4;
         private const int FirstBuildingOrder = 8;
         public const int MaximumBuildingHeight = 24;
+        public const int FactoryStackRise = 18;
+        private static readonly Color32 White = new Color32(255, 255, 255, 255);
         [SerializeField] private Texture2D buildingAtlas;
         [SerializeField] private Material buildingMaterial;
         private Color32[] buildingPixels;
@@ -89,7 +91,24 @@ namespace RotWorld
             AirConditioner, Skylight, HouseDoor, GlassDoor, ShutterDoor, Windows,
             RedSign, PharmacySign, BlueSign, CafeSign, HospitalSign, PoliceSign,
             HealthSign, CivicSign, RestroomSign, GuardSign, HotelSign, OfficeWall,
-            WaterTank, Chimney, SolarPanels, Hatch
+            WaterTank, Chimney, SolarPanels, Hatch,
+            // 벽 3 대 지붕 1 정면 시점의 주택과 상가 및 공장 조각
+            Solid, PlasterWall, BrickWall, HouseWindows,
+            FishIcon, FrontDoor, RoofTiles, RoofEdge,
+            BlockFence, Gate, YardPaving, Asphalt,
+            Storefront, ShopDoor, Awning, SignBand,
+            UpperWindow, FlatRoof, RoofTank, RoofUnit,
+            MetalWall, ShutterBand, OfficeIcon, SawRoof,
+            Smokestack, Container, ConvenienceIcon, MartIcon,
+            PharmacyIcon, FoodIcon, CafeIcon, ToolIcon
+        }
+
+        /// <summary>
+        /// 건물 조합 규칙 선택용 정면 외형 형태
+        /// </summary>
+        public enum BuildingForm
+        {
+            Legacy, House, Villa, Shop, Factory, Warehouse
         }
 
         /// <summary>
@@ -109,12 +128,23 @@ namespace RotWorld
             public bool IsPitched { get; }
             public Color32 RoofTint { get; }
 
+            // 정면 시점 형태와 색상 변형 및 간판 표시 선택
+            public BuildingForm Form { get; }
+            public int Variation { get; }
+            public Color32 Accent { get; }
+            public bool HasAwning { get; }
+
             // 건물의 읽기 전용 조각 선택값 보관
             internal BuildingStyle(BuildingCategory category, BuildingPart roof, BuildingPart wall, BuildingPart door,
                 BuildingPart sign, BuildingPart detail,
-                int height, int variant, bool isPitched)
+                int height, int variant, bool isPitched,
+                BuildingForm form, int variation, Color32 accent, bool hasAwning)
             {
                 // 도시 생성 난수와 독립적으로 결정된 표시 설정 전달
+                Form = form;
+                Variation = variation;
+                Accent = accent;
+                HasAwning = hasAwning;
                 Category = category;
                 Roof = roof;
                 Wall = wall;
@@ -196,7 +226,7 @@ namespace RotWorld
                 buildingAtlas.filterMode != FilterMode.Point || buildingMaterial == null ||
                 buildingMaterial.shader == null || buildingMaterial.mainTexture != buildingAtlas)
             {
-                throw new InvalidOperationException("건물 아틀라스 64×128 Point 설정과 공용 머티리얼 연결이 필요합니다");
+                throw new InvalidOperationException("건물 아틀라스 64×256 Point 설정과 공용 머티리얼 연결이 필요합니다");
             }
 
             buildingPixels = buildingAtlas.GetPixels32();
@@ -662,7 +692,46 @@ namespace RotWorld
                 wall = BuildingPart.HighRiseWall;
             }
 
-            return new BuildingStyle(category, roof, wall, door, sign, detail, height, variant, isPitched);
+            // 주택과 상가 및 공장은 정면 시점 형태로 조합하고 나머지는 기존 조각 조합 유지
+            int variation = (int)(hash >> 16);
+            BuildingForm form = category switch
+            {
+                BuildingCategory.Residential => isPitched ? BuildingForm.House : BuildingForm.Villa,
+                BuildingCategory.Commercial => BuildingForm.Shop,
+                BuildingCategory.Industrial => type == BuildingType.Factory ||
+                    type == BuildingType.Unspecified ? BuildingForm.Factory : BuildingForm.Warehouse,
+                _ => BuildingForm.Legacy
+            };
+
+            if (form == BuildingForm.Legacy)
+            {
+                return new BuildingStyle(category, roof, wall, door, sign, detail, height, variant, isPitched,
+                    form, variation, White, false);
+            }
+
+            // 업종을 한눈에 구분하는 간판 아이콘과 대표색 선택
+            Color32 accent;
+            (sign, accent) = type switch
+            {
+                BuildingType.ConvenienceStore => (BuildingPart.ConvenienceIcon, new Color32(40, 160, 150, 255)),
+                BuildingType.NeighborhoodMarket or BuildingType.SmallSupermarket =>
+                    (BuildingPart.MartIcon, new Color32(226, 120, 40, 255)),
+                BuildingType.Pharmacy => (BuildingPart.PharmacyIcon, new Color32(60, 150, 90, 255)),
+                BuildingType.Restaurant or BuildingType.RiversideRestaurant =>
+                    (BuildingPart.FoodIcon, new Color32(200, 60, 50, 255)),
+                BuildingType.Cafe => (BuildingPart.CafeIcon, new Color32(130, 88, 60, 255)),
+                BuildingType.HardwareStore or BuildingType.ToolStore or BuildingType.RepairShop =>
+                    (BuildingPart.ToolIcon, new Color32(226, 176, 50, 255)),
+                BuildingType.FishingSupplyStore => (BuildingPart.FishIcon, new Color32(50, 110, 180, 255)),
+                _ => form == BuildingForm.Shop
+                    ? (BuildingPart.OfficeIcon, new Color32(50, 70, 120, 255)) : (BuildingPart.None, White)
+            };
+            bool hasAwning = type == BuildingType.Restaurant || type == BuildingType.RiversideRestaurant ||
+                type == BuildingType.Cafe || type == BuildingType.NeighborhoodMarket || type == BuildingType.SmallSupermarket;
+            // 공장 굴뚝만 지붕 위로 올라가므로 선택과 앞뒤 판정의 표시 높이에 반영
+            height = form == BuildingForm.Factory ? FactoryStackRise : 0;
+            return new BuildingStyle(category, roof, wall, door, sign, detail, height, variant, isPitched,
+                form, variation, accent, hasAwning);
         }
 
 
