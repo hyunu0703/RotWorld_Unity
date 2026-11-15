@@ -21,6 +21,9 @@ namespace RotWorld
         public double Hunger => InitialValue * Math.Max(0d, 1d - timeline.Elapsed / HungerDuration);
         public double Thirst => InitialValue * Math.Max(0d, 1d - timeline.ThirstElapsed / ThirstDuration);
 
+        // 아사 판정에 사용하는 수치별 0 지속 시간 중 최댓값
+        public double StarvationElapsed => Math.Max(timeline.HungerZeroElapsed, timeline.ThirstZeroElapsed);
+
         // 독립 생존 수치 생성
         public HumanNeeds()
         {
@@ -95,7 +98,7 @@ namespace RotWorld
             }
 
             timeline.RemoveMember();
-            timeline = new Timeline(timeline.Elapsed, thirstElapsed: timeline.ThirstElapsed);
+            timeline = timeline.Copy();
             schedule = null;
         }
 
@@ -118,6 +121,10 @@ namespace RotWorld
             internal double Elapsed { get; private set; }
             internal double ThirstElapsed { get; private set; }
 
+            // 고갈 이후 회복 전까지 누적한 수치별 0 지속 시간
+            internal double HungerZeroElapsed { get; private set; }
+            internal double ThirstZeroElapsed { get; private set; }
+
             // 독립 또는 공유 상태의 시작 시간 구성
             internal Timeline(double elapsed, int members = 1, double? thirstElapsed = null)
             {
@@ -125,6 +132,18 @@ namespace RotWorld
                 Elapsed = elapsed;
                 ThirstElapsed = thirstElapsed ?? Math.Min(ThirstDuration, elapsed);
                 Members = members;
+            }
+
+
+            // 분리와 고정에 사용할 동일 누적값의 개인 상태 복제
+            internal Timeline Copy()
+            {
+                // 0 지속 시간까지 복사해 분리 직후 아사 카운트 유지
+                return new Timeline(Elapsed, thirstElapsed: ThirstElapsed)
+                {
+                    HungerZeroElapsed = HungerZeroElapsed,
+                    ThirstZeroElapsed = ThirstZeroElapsed
+                };
             }
 
 
@@ -147,6 +166,10 @@ namespace RotWorld
             // 검증된 프레임 시간의 기존 누적 연산 적용
             internal void Advance(double seconds)
             {
+                // 고갈 시점을 넘은 시간만 0 지속 시간에 누적
+                HungerZeroElapsed += Math.Max(0d, Elapsed + seconds - Math.Max(Elapsed, HungerDuration));
+                ThirstZeroElapsed += Math.Max(0d, ThirstElapsed + seconds - Math.Max(ThirstElapsed, ThirstDuration));
+
                 // 개인별 반복과 동일한 덧셈 및 고갈 이후 상한 적용
                 Elapsed = Math.Min(HungerDuration, Elapsed + seconds);
                 ThirstElapsed = Math.Min(ThirstDuration, ThirstElapsed + seconds);
@@ -162,6 +185,17 @@ namespace RotWorld
                     Elapsed - Math.Max(0, hungerRecovery) / InitialValue * HungerDuration);
                 ThirstElapsed = Math.Max(minimumRatio * ThirstDuration,
                     ThirstElapsed - Math.Max(0, thirstRecovery) / InitialValue * ThirstDuration);
+
+                // 회복한 수치만 0 지속 시간 초기화 후 다시 고갈되면 처음부터 누적
+                if (hungerRecovery > 0)
+                {
+                    HungerZeroElapsed = 0d;
+                }
+
+                if (thirstRecovery > 0)
+                {
+                    ThirstZeroElapsed = 0d;
+                }
             }
         }
 
@@ -194,7 +228,7 @@ namespace RotWorld
             {
                 // 이전 묶음과 동일한 누적값으로 다음 프레임 진행 유지
                 previous.RemoveMember();
-                var timeline = new Timeline(previous.Elapsed, thirstElapsed: previous.ThirstElapsed);
+                var timeline = previous.Copy();
                 timelines.Add(timeline);
                 return timeline;
             }
@@ -220,9 +254,8 @@ namespace RotWorld
                         timeline.Advance(seconds);
                     }
 
-                    // 대상이 없거나 모든 수치가 고갈된 묶음의 반복 연산 제거
-                    if (timeline.Members == 0 ||
-                        (timeline.Elapsed >= HungerDuration && timeline.ThirstElapsed >= ThirstDuration))
+                    // 대상이 없는 묶음만 제거하고 고갈 묶음은 아사 카운트를 위해 계속 진행
+                    if (timeline.Members == 0)
                     {
                         timelines.RemoveAt(i);
                     }

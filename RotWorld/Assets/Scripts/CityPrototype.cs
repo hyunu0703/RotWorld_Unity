@@ -117,6 +117,9 @@ namespace RotWorld
         // 선택한 건물의 이름과 지붕 위 위치 표시
         private BuildingInfoPanel buildingInfoPanel;
 
+        // 인간이 있는 건물 위 인원 수 표시
+        private BuildingOccupancyLabels occupancyLabels;
+
         // 생성 설정 입력과 중복 실행 제어
         private TMP_InputField seedInput;
         private TMP_InputField humansInput;
@@ -203,6 +206,12 @@ namespace RotWorld
             if (buildingInfoPanel != null)
             {
                 buildingInfoPanel.Refresh(summonSelection == SummonSelection.None);
+            }
+
+            // 건물 선택 갱신 후 선택 건물을 제외한 인원 라벨 배치
+            if (occupancyLabels != null)
+            {
+                occupancyLabels.Refresh();
             }
 
             // 비활성 선택과 입력 차단 상태에서 커서 숨김
@@ -655,7 +664,9 @@ namespace RotWorld
             welcomeRect.pivot = new Vector2(.5f, .5f);
             welcomeLabel.alignment = TextAlignmentOptions.Center;
             BuildHumanNeedsPanel(canvasRect);
+            var occupancyTemplate = BuildOccupancyLabelTemplate(canvasRect);
             BuildBuildingInfoPanel(canvasRect);
+            occupancyLabels = new BuildingOccupancyLabels(mapView, worldCamera, canvasRect, occupancyTemplate, buildingInfoPanel);
 
             // 생성 설정 입력과 상태 안내 및 실행 버튼 구성
             var dialog = Rect("Map Generation", canvasRect, new Vector2(1, 0), new Vector2(1, 0), new Vector2(-18, 78), new Vector2(466, 526));
@@ -680,6 +691,28 @@ namespace RotWorld
             summonCursor = cursorRect.gameObject.AddComponent<Image>();
             summonCursor.raycastTarget = false;
             summonCursor.gameObject.SetActive(false);
+        }
+
+
+        // 건물 이름 패널 아래 순서로 그릴 인원 라벨 복제 원본 구성
+        private RectTransform BuildOccupancyLabelTemplate(RectTransform canvasRect)
+        {
+            // 이름 패널과 같은 하단 중심 기준과 폰트 및 색상 사용
+            const float OccupancyFontSize = 14f;
+            var panel = Rect("Building Occupancy Template", canvasRect, new Vector2(.5f, .5f), new Vector2(.5f, 0f),
+                Vector2.zero, Vector2.zero);
+            Background(panel, PanelColor).raycastTarget = false;
+            var label = Label(panel, "", Vector2.zero, Vector2.zero, OccupancyFontSize);
+            label.alignment = TextAlignmentOptions.Center;
+            label.enableAutoSizing = false;
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            var textRect = label.rectTransform;
+            textRect.anchorMin = Vector2.zero;
+            textRect.anchorMax = Vector2.one;
+            textRect.offsetMin = Vector2.zero;
+            textRect.offsetMax = Vector2.zero;
+            panel.gameObject.SetActive(false);
+            return panel;
         }
 
 

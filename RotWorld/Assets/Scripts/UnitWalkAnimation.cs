@@ -199,11 +199,11 @@ namespace RotWorld
         }
 
 
-        // 쓰러진 좀비가 진행도에 맞춰 흰색으로 변하는 표시
+        // 쓰러진 좀비 또는 아사한 인간이 진행도에 맞춰 흰색으로 변하는 표시
         public void SetDeathProgress(Sprite[] fadeFrames, float progress)
         {
-            // 사전 생성된 공용 흰색 전환 프레임만 교체해 개체별 텍스처 생성 방지
-            if (!isZombieVisual || fadeFrames == null || fadeFrames.Length == 0)
+            // 사전 생성된 유형별 공용 흰색 전환 프레임만 교체해 개체별 텍스처 생성 방지
+            if (fadeFrames == null || fadeFrames.Length == 0)
             {
                 return;
             }
@@ -228,6 +228,14 @@ namespace RotWorld
             // 같은 지도 부모의 완료 연출과 시작 좌표 배열 재사용
             UnitDustEffect dust = UnitDustEffect.Acquire(transform.parent);
             dust.PlayFromVisual(deathVisuals, visual);
+        }
+
+
+        // 건물 출입에 따른 인물 표시 전환
+        public void SetVisible(bool isVisible)
+        {
+            // 렌더러만 전환해 위치와 프레임 상태 유지
+            visual.enabled = isVisible;
         }
 
 

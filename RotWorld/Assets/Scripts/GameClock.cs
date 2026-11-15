@@ -8,7 +8,7 @@ namespace RotWorld
     public sealed class GameClock
     {
         // 현실 1초당 게임 1분과 하루 경계 계산
-        private const double GameSecondsPerSecond = 60d;
+        internal const double GameSecondsPerSecond = 60d;
         private const int SecondsPerMinute = 60;
         private const int SecondsPerHour = 60 * SecondsPerMinute;
         private const int SecondsPerDay = 24 * SecondsPerHour;

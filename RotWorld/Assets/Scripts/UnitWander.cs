@@ -6,7 +6,7 @@ namespace RotWorld
     /// <summary>
     /// 주변 배회와 좀비의 인간 추적 및 인간의 좀비 회피 이동과 피격 후 쓰러짐 제어
     /// </summary>
-    public sealed class UnitWander : MonoBehaviour
+    public sealed partial class UnitWander : MonoBehaviour
     {
         // 유형별 기본 능력치와 개체 속도 편차
         [SerializeField] private float humanSpeed = 1.8f;
@@ -150,12 +150,12 @@ namespace RotWorld
         private const float ConversionDelay = 5f;
         private const float FallDuration = .3f;
         private const float RiseDuration = .3f;
-        public bool IsHumanTarget => !isZombie && !isDowned;
+        public bool IsHumanTarget => !isZombie && !isDowned && insideBuilding == null;
         public bool IsZombieTarget => isZombie && !isDowned;
 
         // 기존 인구 데이터와 이동 및 걷기 표시 연결
         public void Initialize(CityMap map, bool zombie, int index, Sprite[] zombieFrames = null, Sprite[] conversionFrames = null,
-            UnitDeathVisuals deathVisuals = null)
+            UnitDeathVisuals deathVisuals = null, UnitDeathVisuals starvationVisuals = null)
         {
             // 필수 지도와 표시 컴포넌트 및 인구 인덱스 검증
             var units = map == null ? null : zombie ? map.Zombies : map.Humans;
@@ -171,6 +171,8 @@ namespace RotWorld
             isZombie = zombie;
             Needs = zombie ? null : map.NeedsSchedule.Create();
             Inventory = zombie ? null : new HumanInventory(Needs);
+            brain = zombie ? null : new HumanBrain(map, Needs, Inventory);
+            this.starvationVisuals = starvationVisuals;
 
             walkAnimation.SetMap(map);
             walkAnimation.SetUnitType(zombie);
@@ -218,21 +220,29 @@ namespace RotWorld
                 return;
             }
 
-            // 쓰러진 개체의 이동을 차단하고 좀비는 흰색 전환 후 소멸 및 인간은 설정 시간 후 변환
+            // 건물 안팎과 무관하게 0 지속 시간이 한계를 넘은 인간의 아사 처리
+            if (!isZombie && !isDowned && Needs != null && Needs.StarvationElapsed >= StarvationLimit)
+            {
+                Starve();
+                return;
+            }
+
+            // 쓰러진 개체의 이동을 차단하고 좀비와 아사자는 흰색 전환 후 소멸 및 피격 인간은 설정 시간 후 변환
             if (isDowned)
             {
                 downedElapsed += Time.deltaTime;
                 walkAnimation.SetFallProgress(downedElapsed / FallDuration);
 
-                if (isZombie)
+                if (isZombie || isStarved)
                 {
-                    // 쓰러진 뒤 2초부터 소멸 직전까지 공용 프레임으로 점진적인 흰색 전환
+                    // 쓰러진 뒤 2초부터 소멸 직전까지 유형별 공용 프레임으로 점진적인 흰색 전환
+                    UnitDeathVisuals visuals = isZombie ? deathVisuals : starvationVisuals;
                     float fadeProgress = Mathf.InverseLerp(ZombieFadeStartDelay, ZombieFadeEndTime, downedElapsed);
-                    walkAnimation.SetDeathProgress(deathVisuals == null ? null : deathVisuals.FadeFrames, fadeProgress);
+                    walkAnimation.SetDeathProgress(visuals == null ? null : visuals.FadeFrames, fadeProgress);
 
                     if (downedElapsed >= ZombieDisintegrateDelay)
                     {
-                        Disintegrate();
+                        Disintegrate(visuals);
                     }
 
                     return;
@@ -252,6 +262,13 @@ namespace RotWorld
             {
                 riseRemaining = Mathf.Max(0f, riseRemaining - Time.deltaTime);
                 walkAnimation.SetFallProgress(riseRemaining / RiseDuration);
+                return;
+            }
+
+            // 건물 안 인간은 이동 없이 체류 판단과 퇴장만 처리
+            if (insideBuilding != null)
+            {
+                UpdateInsideBuilding();
                 return;
             }
 
@@ -305,6 +322,13 @@ namespace RotWorld
                 return;
             }
 
+            // 입구 유인 중 좀비 기준 원형 이동 구간은 실제 좌표 이동으로 처리
+            if (!isZombie && lurePhase == LurePhase.Circle)
+            {
+                UpdateLureOrbit();
+                return;
+            }
+
             // 좀비와 합동 공격 지원자는 기존 연속 추격 이동 공유
             if ((isZombie && (chaseTarget >= 0 || isDirectPursuit)) || cooperativeLeader != null)
             {
@@ -316,7 +340,8 @@ namespace RotWorld
             {
                 restRemaining -= Time.deltaTime;
 
-                if (restRemaining <= 0f && chaseTarget < 0)
+                // 생존 목표나 좀비의 건물 인지가 없을 때만 기존 무작위 배회
+                if (restRemaining <= 0f && chaseTarget < 0 && !TryPlanSurvivalPath())
                 {
                     UnitPathfinder.FindWanderPath(map, currentTile, random, path);
                     PreparePathStart();
@@ -399,6 +424,12 @@ namespace RotWorld
                 map.OccupyTile(currentTile);
                 pathIndex++;
 
+                // 목표 건물 입구 도착 시 진입 후 남은 이동과 표시 갱신 생략
+                if (!isZombie && TryEnterNavigationBuilding())
+                {
+                    return;
+                }
+
                 UpdateReaction(false);
             }
 
@@ -424,9 +455,9 @@ namespace RotWorld
                 return;
             }
 
-            // 도주자는 일반 반격 및 지원자는 기존 지정 대상과 이동 공격 유지
+            // 일반 반격은 붙잡혔을 때만 허용하고 지원자는 기존 지정 대상과 이동 공격 유지
             // 세 명의 유인자는 공격보다 유인 이동 우선
-            if (cooperativeSecondHelper == null)
+            if (cooperativeSecondHelper == null && (IsGrabbed || cooperativeLeader != null))
             {
                 combat.TryAttackZombie(position, cooperativeLeader != null ? cooperativeZombie : null);
             }
@@ -441,6 +472,8 @@ namespace RotWorld
             {
                 detectionRemaining -= Time.deltaTime;
                 pathRetryRemaining -= Time.deltaTime;
+                survivalDecisionRemaining -= Time.deltaTime;
+                navigationRetryRemaining -= Time.deltaTime;
             }
 
             bool shouldScan = detect && detectionRemaining <= 0f;
@@ -473,6 +506,12 @@ namespace RotWorld
 
             // 진행 중인 인접 구간을 마친 뒤 경로 교체로 건물 모서리 관통 방지
             if (reservations.Count > 0)
+            {
+                return;
+            }
+
+            // 입구 유인과 도주 중 숨기 및 생존 목표 이동이 경로를 맡으면 일반 도주와 배회 경로 교체 생략
+            if (!isZombie && UpdateSurvivalPath())
             {
                 return;
             }
@@ -1097,7 +1136,13 @@ namespace RotWorld
             // 두 명은 기존 지원자 중심 유지 및 세 명은 두 공격자의 중간점 사용
             Vector2 center = cooperativeSecondHelper == null ? cooperativeHelper.position
                 : (cooperativeHelper.position + cooperativeSecondHelper.position) * .5f;
+            MoveAlongOrbit(center, cooperativeZombie.position);
+        }
 
+
+        // 지정 중심의 반경 4타일 원주를 따라 장애물을 피하는 연속 이동
+        private void MoveAlongOrbit(Vector2 center, Vector2 threat)
+        {
             // 기존 타일 경로 예약을 반환하고 실제 좌표 기반 이동으로 전환
             if (!isDirectPursuit)
             {
@@ -1127,7 +1172,7 @@ namespace RotWorld
 
                 if (radial.sqrMagnitude == 0f)
                 {
-                    radial = position - cooperativeZombie.position;
+                    radial = position - threat;
                     radial = radial.sqrMagnitude > 0f ? radial : Vector2.right;
                 }
 
@@ -1442,8 +1487,8 @@ namespace RotWorld
         }
 
 
-        // 마지막 피격 후 이동과 추가 타격 중단 및 쓰러짐 시작
-        private void FallDown()
+        // 마지막 피격 또는 아사 후 이동과 추가 타격 중단 및 쓰러짐 시작
+        private void FallDown(bool starved = false)
         {
             // 좀비는 별도 소멸 흐름으로 분기
             if (isZombie)
@@ -1452,10 +1497,12 @@ namespace RotWorld
                 return;
             }
 
-            // 쓰러진 참여자의 합동 공격 연결 즉시 해제
+            // 쓰러진 참여자의 합동 공격 연결과 진행 중인 생존 이동 즉시 해제
             ReleaseCooperativeAttack();
+            ClearSurvivalMovement();
 
             Needs.Freeze();
+            isStarved = starved;
 
             // 쓰러진 인간의 이동 예약과 타일 점유 및 실제 충돌 좌표 반환
             isDowned = true;
@@ -1476,8 +1523,20 @@ namespace RotWorld
             walkAnimation.SetDownedSortingOrder();
             walkAnimation.SetKnockbackHeight(0f);
             walkAnimation.Stop();
-            walkAnimation.SetConversionProgress(conversionFrames, 0f);
-            combat.FlashHit();
+
+            // 아사자는 좀비 변환 대신 흰색 전환 준비와 인구 수 즉시 반영
+            if (starved)
+            {
+                combat.CancelAttack();
+                walkAnimation.SetDeathProgress(starvationVisuals == null ? null : starvationVisuals.FadeFrames, 0f);
+                map.StarvedHumans.Add(populationIndex);
+                map.NotifyPopulationChanged();
+            }
+            else
+            {
+                walkAnimation.SetConversionProgress(conversionFrames, 0f);
+                combat.FlashHit();
+            }
 
             // 기존 사전 순서로 현재 추적자에게만 인간 상실 통지
             map.CollectPursuers(populationIndex, deathCandidates);
@@ -1539,11 +1598,11 @@ namespace RotWorld
         }
 
 
-        // 흰색 전환을 마친 좀비를 먼지 연출로 교체 후 제거
-        private void Disintegrate()
+        // 흰색 전환을 마친 좀비 또는 아사자를 먼지 연출로 교체 후 제거
+        private void Disintegrate(UnitDeathVisuals visuals)
         {
-            // 충돌 해제를 마친 시체를 독립 먼지 연출로 교체
-            walkAnimation.Disintegrate(deathVisuals);
+            // 충돌 해제를 마친 시체를 유형별 독립 먼지 연출로 교체
+            walkAnimation.Disintegrate(visuals);
             enabled = false;
             Destroy(gameObject);
         }
@@ -1809,6 +1868,7 @@ namespace RotWorld
             isZombie = true;
             Needs = null;
             Inventory = null;
+            brain = null;
             isDowned = false;
             hasBeenHit = false;
             hitCount = 0;
@@ -2476,8 +2536,14 @@ namespace RotWorld
                     map.ChangePursuer(populationIndex, chaseTarget, -1);
                 }
 
-                // 시체는 쓰러질 때 점유를 반환하므로 다른 개체의 점유 해제 방지
-                if (!isDowned)
+                // 건물 안에서 제거되는 인간의 인원 기록 해제
+                if (insideBuilding != null)
+                {
+                    map.Occupancy.Exit(insideBuilding, this);
+                }
+
+                // 시체와 건물 안 인간은 점유를 이미 반환했으므로 다른 개체의 점유 해제 방지
+                if (!isDowned && insideBuilding == null)
                 {
                     map.ReleaseTile(currentTile);
                 }

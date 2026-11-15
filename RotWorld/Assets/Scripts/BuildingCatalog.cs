@@ -499,5 +499,25 @@ namespace RotWorld
 
             return Names[index];
         }
+
+
+        // 인간이 정착지로 사용할 수 있는 주거 시설 종류 조회
+        public static bool IsResidential(BuildingType type)
+        {
+            // 기획에서 정한 주거 시설 일곱 종류만 정착 후보로 허용
+            switch (type)
+            {
+                case BuildingType.DetachedHouse:
+                case BuildingType.Villa:
+                case BuildingType.CountryHouse:
+                case BuildingType.Apartment:
+                case BuildingType.RiversideHouse:
+                case BuildingType.StaffDormitory:
+                case BuildingType.Cabin:
+                    return true;
+                default:
+                    return false;
+            }
+        }
     }
 }

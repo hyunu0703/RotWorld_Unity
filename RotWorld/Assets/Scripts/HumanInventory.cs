@@ -57,6 +57,27 @@ namespace RotWorld
         }
 
 
+        // 소지 칸을 거치지 않고 주운 가방을 바로 착용
+        public bool TryEquip(ItemDefinition bag)
+        {
+            // 가방이 아닌 아이템과 중복 착용 차단
+            if (bag == null)
+            {
+                throw new ArgumentNullException(nameof(bag));
+            }
+
+            if (bag != ItemCatalog.Bag || EquippedBag != null)
+            {
+                return false;
+            }
+
+            // 별도 장비 칸에 보관 후 표시 변경 기록
+            EquippedBag = bag;
+            Version++;
+            return true;
+        }
+
+
         // 소지 슬롯의 음식 소비 또는 가방 착용
         public bool TryUse(int slotIndex)
         {

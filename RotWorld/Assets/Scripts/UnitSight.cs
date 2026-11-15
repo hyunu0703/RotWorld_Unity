@@ -11,8 +11,9 @@ namespace RotWorld
         private const float QueryMargin = .001f;
         private static readonly System.Collections.Generic.List<int> Candidates = new System.Collections.Generic.List<int>();
 
-        // 최초 감지와 유형별 반응 종료 거리
+        // 좀비의 인간 최초 감지와 인간의 좀비 최초 감지 및 유형별 반응 종료 거리
         public const float DetectionRadius = 5f;
+        public const float HumanDetectionRadius = 7f;
         public const float FleeReleaseRadius = 15f;
         public const float FleeScanRadius = 8f;
         private const float ChaseReleaseRadius = 8f;
@@ -45,11 +46,11 @@ namespace RotWorld
         }
 
 
-        // 감지 반경 안에서 건물에 가려지지 않은 가장 가까운 좀비 조회
+        // 인간 감지 반경 안에서 건물에 가려지지 않은 가장 가까운 좀비 조회
         public static int FindVisibleZombie(CityMap map, Vector2 observer)
         {
-            // 좀비 목록에 인간 감지와 동일한 거리 및 차폐 조건 적용
-            return FindNearestUnit(map, observer, map.Zombies);
+            // 좀비보다 넓은 인간 감지 반경과 동일한 차폐 조건 적용
+            return FindNearestUnit(map, observer, map.Zombies, HumanDetectionRadius);
         }
 
 

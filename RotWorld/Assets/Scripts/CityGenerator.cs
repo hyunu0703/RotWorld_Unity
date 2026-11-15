@@ -105,9 +105,13 @@ namespace RotWorld
         // 근접 타격을 전달할 인간 이동 컴포넌트
         internal HashSet<int> InactiveHumans { get; } = new HashSet<int>();
         internal HashSet<int> ConvertedHumans { get; } = new HashSet<int>();
+        internal HashSet<int> StarvedHumans { get; } = new HashSet<int>();
         internal Dictionary<int, UnitWander> ZombieUnits { get; } = new Dictionary<int, UnitWander>();
         internal HashSet<int> InactiveZombies { get; } = new HashSet<int>();
-        public int HumanCount => Humans.Count - ConvertedHumans.Count;
+        public int HumanCount => Humans.Count - ConvertedHumans.Count - StarvedHumans.Count;
+
+        // 건물 내부 인간 집합과 출입구 주변 조회
+        public BuildingOccupancy Occupancy { get; }
         public int ZombieCount => Zombies.Count - InactiveZombies.Count;
         public event Action PopulationChanged;
 
@@ -373,6 +377,7 @@ namespace RotWorld
             PositionChanges = new GridChangeTracker(size);
             HumanQueries = new UnitQueryIndex(HumanUnits);
             ZombieQueries = new UnitQueryIndex(ZombieUnits);
+            Occupancy = new BuildingOccupancy(this);
         }
     }
 

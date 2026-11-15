@@ -8,7 +8,7 @@ using UnityEngine.InputSystem;
 namespace RotWorld
 {
     /// <summary>
-    /// 클릭한 건물 이름 표시와 지붕 위 화면 위치 추적
+    /// 클릭한 건물 이름과 내부 인원 수 표시 및 지붕 위 화면 위치 추적
     /// </summary>
     public sealed class BuildingInfoPanel
     {
@@ -31,6 +31,10 @@ namespace RotWorld
         private CityBuilding selectedBuilding;
         private CityMap selectedMap;
         private float selectedTop;
+        public CityBuilding SelectedBuilding => selectedBuilding;
+
+        // 마지막으로 표시한 내부 인원 수
+        private int displayedCount = -1;
 
         // 기존 UI 클릭의 지도 선택 전파 차단
         private readonly PointerEventData pointer;
@@ -102,7 +106,7 @@ namespace RotWorld
                     {
                         // 외형 조합 비용을 매 프레임 반복하지 않도록 선택 시 한 번만 상단 계산
                         selectedTop = mapView.GetBuildingVisualTop(selectedBuilding);
-                        RefreshName();
+                        displayedCount = -1;
                     }
                 }
             }
@@ -113,16 +117,26 @@ namespace RotWorld
                 return;
             }
 
+            // 선택 변경 또는 인원 변동 시에만 텍스트와 패널 크기 갱신
+            int count = mapView.Map.Occupancy.GetCount(selectedBuilding);
+
+            if (count != displayedCount)
+            {
+                displayedCount = count;
+                RefreshName();
+            }
+
             RefreshPosition();
         }
 
 
-        // 선택한 건물 이름의 실제 글자 크기에 맞춰 패널 크기 갱신
+        // 선택한 건물 이름과 인원 수의 실제 글자 크기에 맞춰 패널 크기 갱신
         private void RefreshName()
         {
-            // 선택 변경 시에만 폰트 기준 권장 크기 계산과 좌우 및 상하 여백 추가
-            nameLabel.text = selectedBuilding.Name;
-            Vector2 textSize = nameLabel.GetPreferredValues(selectedBuilding.Name);
+            // 선택이나 인원 변경 시에만 폰트 기준 권장 크기 계산과 좌우 및 상하 여백 추가
+            string text = selectedBuilding.Name + " [" + displayedCount + "]";
+            nameLabel.text = text;
+            Vector2 textSize = nameLabel.GetPreferredValues(text);
             panel.sizeDelta = new Vector2(Mathf.Ceil(textSize.x) + HorizontalPadding * 2f,
                 Mathf.Ceil(textSize.y) + VerticalPadding * 2f);
         }
