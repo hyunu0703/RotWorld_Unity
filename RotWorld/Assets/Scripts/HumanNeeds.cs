@@ -8,12 +8,12 @@ namespace RotWorld
     /// </summary>
     public sealed class HumanNeeds
     {
-        // 생성 시 초기 수치와 아이템 회복 상한 및 기존 고갈 기준
+        // 생성 시 초기 수치와 아이템 회복 상한 및 초기값 기준 게임 시간 고갈 기준
         public const double InitialValue = 100d;
         public const double MaximumValue = 150d;
-        private const double SecondsPerDay = 24d * 60d * 60d;
-        private const double HungerDuration = 7d * SecondsPerDay;
-        private const double ThirstDuration = 3d * SecondsPerDay;
+        private const double SecondsPerHour = 60d * 60d;
+        private const double HungerDuration = 48d * SecondsPerHour;
+        private const double ThirstDuration = 12d * SecondsPerHour;
 
         // 개인이 참조하는 시간 상태와 지도 소유 진행 목록
         private Timeline timeline;
