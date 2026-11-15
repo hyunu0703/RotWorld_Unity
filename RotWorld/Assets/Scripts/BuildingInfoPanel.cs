@@ -8,7 +8,7 @@ using UnityEngine.InputSystem;
 namespace RotWorld
 {
     /// <summary>
-    /// 클릭한 건물 이름과 내부 인원 수 및 주거 시설 보관 재고 표시와 지붕 위 화면 위치 추적
+    /// 클릭한 건물 이름과 내부 인원 수 및 수색한 건물의 재고 표시와 지붕 위 화면 위치 추적
     /// </summary>
     public sealed class BuildingInfoPanel
     {
@@ -19,12 +19,15 @@ namespace RotWorld
         private readonly RectTransform panel;
         private readonly TMP_Text nameLabel;
 
-        // 주거 시설 보관량 줄과 ItemCatalog.All 순서의 읽기 전용 재고 칸
+        // 주거 시설 보관량 또는 빈 재고 안내 줄과 ItemCatalog.All 순서의 읽기 전용 재고 칸
         private readonly TMP_Text storageLabel;
         private readonly RectTransform[] stockSlots;
         private readonly TMP_Text[] stockLabels;
         private const float StorageFontSize = 14f;
         private const float StockSlotFontSize = 11f;
+        private const string EmptyStockText = "재고 없음";
+        private const string SearchingText = "수색 중";
+        private const string SearchingSeparator = " · ";
 
         // 텍스트 밀착 여백과 지도 축소 단계별 표시 크기
         private const float FontSize = 16f;
@@ -40,9 +43,10 @@ namespace RotWorld
         private float selectedTop;
         public CityBuilding SelectedBuilding => selectedBuilding;
 
-        // 마지막으로 표시한 내부 인원 수와 재고 버전
+        // 마지막으로 표시한 내부 인원 수와 재고 버전 및 수색 여부
         private int displayedCount = -1;
         private int displayedStockVersion = -1;
+        private bool isDisplayedSearched;
 
         // 기존 UI 클릭의 지도 선택 전파 차단
         private readonly PointerEventData pointer;
@@ -143,6 +147,7 @@ namespace RotWorld
                         selectedTop = mapView.GetBuildingVisualTop(selectedBuilding);
                         displayedCount = -1;
                         displayedStockVersion = -1;
+                        isDisplayedSearched = false;
                     }
                 }
             }
@@ -153,14 +158,16 @@ namespace RotWorld
                 return;
             }
 
-            // 선택 변경 또는 인원·재고 변동 시에만 텍스트와 패널 크기 갱신
+            // 선택 변경 또는 인원·재고 변동과 첫 수색 시에만 텍스트와 패널 크기 갱신
             int count = mapView.Map.Occupancy.GetCount(selectedBuilding);
             int stockVersion = selectedBuilding.StockVersion;
+            bool isSearched = selectedBuilding.IsSearched;
 
-            if (count != displayedCount || stockVersion != displayedStockVersion)
+            if (count != displayedCount || stockVersion != displayedStockVersion || isSearched != isDisplayedSearched)
             {
                 displayedCount = count;
                 displayedStockVersion = stockVersion;
+                isDisplayedSearched = isSearched;
                 RefreshContent();
             }
 
@@ -168,39 +175,50 @@ namespace RotWorld
         }
 
 
-        // 선택한 건물 이름과 인원 수 및 주거 시설 재고의 실제 크기에 맞춰 패널 갱신
+        // 선택한 건물 이름과 인원 수 및 수색한 건물 재고의 실제 크기에 맞춰 패널 갱신
         private void RefreshContent()
         {
-            // 선택이나 인원·재고 변경 시에만 이름 줄의 폰트 기준 권장 크기 계산
-            string text = selectedBuilding.Name + " [" + displayedCount + "]";
+            // 선택이나 인원·재고 변경 시에만 이름 줄의 폰트 기준 권장 크기 계산하고 인원이 없으면 이름만 표시
+            string text = displayedCount > 0 ? selectedBuilding.Name + " [" + displayedCount + "]" : selectedBuilding.Name;
             nameLabel.text = text;
             Vector2 nameSize = nameLabel.GetPreferredValues(text);
             float width = Mathf.Ceil(nameSize.x) + HorizontalPadding * 2f;
             float height = Mathf.Ceil(nameSize.y) + VerticalPadding * 2f;
             nameLabel.rectTransform.sizeDelta = new Vector2(-HorizontalPadding * 2f, Mathf.Ceil(nameSize.y));
 
-            // 재고가 남은 주거 시설만 보관량 줄과 재고 칸 표시
+            // 인간이 한 번도 들어가 보지 않은 건물은 이름 줄만 표시
             var stock = selectedBuilding.Stock;
-            bool showsStock = BuildingCatalog.IsResidential(selectedBuilding.Type) && selectedBuilding.TotalStockCount > 0;
+            bool showsStock = selectedBuilding.IsSearched;
             int slotCount = 0;
-            storageLabel.gameObject.SetActive(showsStock);
 
-            if (showsStock)
+            // 주거 시설은 찾아낸 보관량과 용량, 그 외 건물은 수색 중이거나 빈 재고일 때만 안내 줄 표시
+            bool isSearching = showsStock && !selectedBuilding.IsSearchComplete;
+            string storage = !showsStock ? null : BuildingCatalog.IsResidential(selectedBuilding.Type)
+                ? (isSearching ? SearchingText + SearchingSeparator : "") + "보관 " + selectedBuilding.RevealedSupplyCount +
+                    " / " + selectedBuilding.StorageCapacity
+                : isSearching ? SearchingText : selectedBuilding.TotalStockCount == 0 ? EmptyStockText : null;
+            storageLabel.gameObject.SetActive(storage != null);
+
+            if (storage != null)
             {
-                // 이름 아래에 음식·음료 보관량과 용량 표시
-                string storage = "보관 " + selectedBuilding.StoredSupplyCount + " / " + selectedBuilding.StorageCapacity;
+                // 이름 아래에 보관량 또는 빈 재고 안내 줄 배치
                 storageLabel.text = storage;
                 Vector2 storageSize = storageLabel.GetPreferredValues(storage);
                 PlaceTopRow(storageLabel.rectTransform, height, Mathf.Ceil(storageSize.y));
                 width = Mathf.Max(width, Mathf.Ceil(storageSize.x) + HorizontalPadding * 2f);
                 height += Mathf.Ceil(storageSize.y) + VerticalPadding;
+            }
 
-                // 재고가 있는 아이템 종류만 카탈로그 순서로 칸 내용 갱신
+            if (showsStock)
+            {
+                // 수색으로 찾아낸 아이템 종류만 카탈로그 순서로 칸 내용 갱신해 하나씩 늘어나게 표시
                 for (int i = 0; i < stockSlots.Length && i < stock.Count; i++)
                 {
-                    if (stock[i] > 0)
+                    int count = selectedBuilding.GetRevealedCount(i);
+
+                    if (count > 0)
                     {
-                        stockLabels[slotCount].text = ItemCatalog.All[i].Name + "\n" + stock[i];
+                        stockLabels[slotCount].text = ItemCatalog.All[i].Name + "\n" + count;
                         slotCount++;
                     }
                 }

@@ -22,6 +22,7 @@ namespace RotWorld
         private const float ForageSearchRadius = 20f;
         private const int ForageRadiusSteps = 4;
         private const double ForageStaySeconds = 30d * 60d;
+        private const double SearchSeconds = ForageStaySeconds;
         private const double HideStaySeconds = 30d * 60d;
         private const int AbandonZombieCount = 3;
         private const float DangerMemoryDuration = 120f;
@@ -203,8 +204,11 @@ namespace RotWorld
         // 건물 내부 체류 판단과 섭취 후 퇴장 희망 여부 반환
         internal bool UpdateInside(CityBuilding building, double gameSeconds, int zombiesInView, Vector2 zombieCenter)
         {
-            // 체류 시간 누적 후 현재 건물 재고와 비상 소지품 순으로 섭취하고 들어와 본 재고 기억
+            // 체류 시간에 비례해 건물 재고를 한 개씩 찾아내 파밍 체류가 끝날 때 수색 완료
             stayElapsed += gameSeconds;
+            building.RevealSearch(stayElapsed / SearchSeconds);
+
+            // 찾아낸 건물 재고와 비상 소지품 순으로 섭취하고 찾아낸 재고만 기억
             EatInBuilding(building);
 
             // 정착지는 좀비가 많으면 버리고 섭취로 해결하지 못하거나 비축이 부족하면 파밍 출발
@@ -215,6 +219,12 @@ namespace RotWorld
                     MarkDanger(building);
                     abandonedThreat = zombieCenter;
                     return true;
+                }
+
+                // 수색을 마치지 않은 정착지는 허기·갈증과 무관하게 모두 찾은 뒤 원하는 아이템이 없을 때만 출발
+                if (!building.IsSearchComplete && stayElapsed < SearchSeconds)
+                {
+                    return false;
                 }
 
                 // 배고프지 않아도 정착지 재고와 소지품이 비축 목표보다 적으면 비축 파밍 시작

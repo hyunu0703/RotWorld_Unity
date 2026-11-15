@@ -88,16 +88,16 @@ namespace RotWorld
         // 정착지 재고와 자기 소지품의 음식·음료가 비축 목표 이상인지 조회
         internal bool HasEnoughReserve(CityBuilding settlement)
         {
-            // 정착지 재고 합계와 소지품 합계를 함께 비교
-            return settlement.StoredSupplyCount + CarriedSupplyCount >= GetReserveTarget(settlement);
+            // 수색으로 찾아낸 정착지 재고 합계와 소지품 합계를 함께 비교
+            return settlement.RevealedSupplyCount + CarriedSupplyCount >= GetReserveTarget(settlement);
         }
 
 
-        // 기억상 부족한 수치를 채울 아이템이 남아 있거나 아직 들어가 보지 않은 건물인지 조회
+        // 기억상 부족한 수치를 채울 아이템이 남아 있거나 아직 다 찾아보지 않은 건물인지 조회
         internal bool HasUsefulSupply(CityBuilding building)
         {
-            // 미방문 건물은 재고를 모르므로 탐색 후보로 유지
-            if (!memory.TryGetValue(building, out int[] stock))
+            // 미방문 건물과 수색을 마치지 않은 건물은 남은 재고를 모르므로 탐색 후보로 유지
+            if (!memory.TryGetValue(building, out int[] stock) || !building.IsSearchComplete)
             {
                 return true;
             }
@@ -206,21 +206,23 @@ namespace RotWorld
         }
 
 
-        // 현재 재고를 기억 스냅샷으로 저장
+        // 수색으로 찾아낸 재고를 기억 스냅샷으로 저장
         internal void Remember(CityBuilding building)
         {
-            // 기존 배열을 재사용해 반복 방문 시 할당 감소
-            var source = building.Stock;
+            // 재고를 직접 본 건물로 기록해 건물 정보 패널의 재고 표시 허용
+            building.MarkSearched();
 
+            // 기존 배열을 재사용해 반복 방문 시 할당 감소
             if (!memory.TryGetValue(building, out int[] stock))
             {
-                stock = new int[source.Count];
+                stock = new int[building.Stock.Count];
                 memory.Add(building, stock);
             }
 
+            // 아직 찾지 못한 아이템은 기억에 넣지 않음
             for (int i = 0; i < stock.Length; i++)
             {
-                stock[i] = source[i];
+                stock[i] = building.GetRevealedCount(i);
             }
         }
 
@@ -252,10 +254,11 @@ namespace RotWorld
         // 가방 착용 후 비축이 적은 수치를 채우는 아이템부터 빈 칸 보충
         private void Loot(CityBuilding building)
         {
-            // 가방은 칸을 차지하지 않고 용량을 늘리므로 다른 아이템보다 먼저 착용
+            // 가방은 칸을 차지하지 않고 용량을 늘리므로 찾아낸 가방이 있으면 다른 아이템보다 먼저 착용
             int bagIndex = FindItemIndex(ItemCatalog.Bag);
 
-            if (inventory.EquippedBag == null && bagIndex >= 0 && building.Stock[bagIndex] > 0 && inventory.TryEquip(ItemCatalog.Bag))
+            if (inventory.EquippedBag == null && bagIndex >= 0 && building.GetRevealedCount(bagIndex) > 0 &&
+                inventory.TryEquip(ItemCatalog.Bag))
             {
                 building.TryTake(bagIndex);
             }
@@ -281,7 +284,7 @@ namespace RotWorld
         }
 
 
-        // 지정 수치를 채우는 재고 아이템 중 회복량이 가장 큰 항목 조회
+        // 지정 수치를 채우는 수색으로 찾아낸 재고 아이템 중 회복량이 가장 큰 항목 조회
         private int FindStockItem(CityBuilding building, bool hunger, bool mustFit)
         {
             // 섭취 시에는 최대치 초과 아이템을 제외하고 파밍 시에는 모든 대상 아이템 허용
@@ -294,7 +297,7 @@ namespace RotWorld
                 var item = ItemCatalog.All[i];
                 int recovery = GetRecovery(item, hunger);
 
-                if (building.Stock[i] <= 0 || !item.IsSupply || recovery <= 0 || (mustFit && recovery > room) || recovery <= bestRecovery)
+                if (building.GetRevealedCount(i) <= 0 || !item.IsSupply || recovery <= 0 || (mustFit && recovery > room) || recovery <= bestRecovery)
                 {
                     continue;
                 }

@@ -68,14 +68,21 @@ namespace RotWorld
         public BuildingType Type { get; }
         public string Name => BuildingCatalog.GetName(Type);
 
-        // ItemCatalog.All 순서의 아이템 재고와 UI 갱신용 변경 버전
+        // ItemCatalog.All 순서의 아이템 재고와 재고·수색 표시 UI 갱신용 변경 버전
         private readonly int[] stock;
         public IReadOnlyList<int> Stock { get; }
         public int StockVersion { get; private set; }
 
+        // 인간이 수색으로 찾아낸 아이템 종류별 개수
+        private readonly int[] revealed;
+
         // 주거 시설의 음식·음료 저장 한도와 이 건물을 정착지로 둔 인간 수
         public int StorageCapacity { get; }
         public int SettlerCount { get; private set; }
+
+        // 인간이 한 번이라도 들어가 수색을 시작했는지와 모든 재고를 찾아냈는지 여부
+        public bool IsSearched { get; private set; }
+        public bool IsSearchComplete { get; private set; }
 
         // 생성된 필지와 재고 및 저장 용량 연결
         public CityBuilding(RectInt bounds, Vector2Int door, int kind, int[] stock, BuildingType type = BuildingType.Unspecified,
@@ -99,6 +106,7 @@ namespace RotWorld
             Type = type;
             this.stock = stock;
             Stock = Array.AsReadOnly(stock);
+            revealed = new int[stock.Length];
             StorageCapacity = storageCapacity;
         }
 
@@ -116,6 +124,27 @@ namespace RotWorld
                     if (ItemCatalog.All[i].IsSupply)
                     {
                         count += stock[i];
+                    }
+                }
+
+                return count;
+            }
+        }
+
+
+        // 수색으로 찾아낸 저장 음식·음료 개수 조회
+        public int RevealedSupplyCount
+        {
+            get
+            {
+                // 남은 재고를 넘지 않는 발견 개수만 합산
+                int count = 0;
+
+                for (int i = 0; i < stock.Length && i < ItemCatalog.All.Count; i++)
+                {
+                    if (ItemCatalog.All[i].IsSupply)
+                    {
+                        count += GetRevealedCount(i);
                     }
                 }
 
@@ -142,6 +171,19 @@ namespace RotWorld
         }
 
 
+        // 수색으로 찾아낸 지정 아이템 개수 조회
+        public int GetRevealedCount(int itemIndex)
+        {
+            // 섭취·파밍으로 줄어든 재고를 넘지 않게 제한
+            if (itemIndex < 0 || itemIndex >= stock.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(itemIndex));
+            }
+
+            return Math.Min(revealed[itemIndex], stock[itemIndex]);
+        }
+
+
         // 출입구만 바꾼 같은 건물 생성
         internal CityBuilding WithDoor(Vector2Int door)
         {
@@ -158,16 +200,17 @@ namespace RotWorld
         }
 
 
-        // 재고에서 아이템 한 개 차감
+        // 수색으로 찾아낸 재고에서 아이템 한 개 차감
         internal bool TryTake(int itemIndex)
         {
-            // 범위 밖 인덱스와 빈 재고 차단
-            if (itemIndex < 0 || itemIndex >= stock.Length || stock[itemIndex] <= 0)
+            // 범위 밖 인덱스와 빈 재고 및 아직 찾지 못한 아이템 수집 차단
+            if (itemIndex < 0 || itemIndex >= stock.Length || GetRevealedCount(itemIndex) <= 0)
             {
                 return false;
             }
 
-            // 섭취와 파밍으로 줄어든 재고를 UI에 알릴 버전 증가
+            // 찾아낸 아이템 한 개를 재고와 발견 개수에서 함께 빼고 UI에 알릴 버전 증가
+            revealed[itemIndex] = GetRevealedCount(itemIndex) - 1;
             stock[itemIndex]--;
             StockVersion++;
             return true;
@@ -184,10 +227,58 @@ namespace RotWorld
                 return false;
             }
 
-            // 귀환 인간이 맡긴 아이템을 UI에 알릴 버전 증가
+            // 귀환 인간이 맡긴 아이템은 이미 아는 아이템으로 바로 표시하고 UI에 알릴 버전 증가
             stock[itemIndex]++;
+            revealed[itemIndex]++;
             StockVersion++;
             return true;
+        }
+
+
+        // 인간이 들어가 수색을 시작한 건물로 기록
+        internal void MarkSearched()
+        {
+            // 한 번 수색을 시작한 건물은 이후 계속 재고 표시 대상
+            IsSearched = true;
+        }
+
+
+        // 수색 진행률에 맞춰 남은 아이템을 카탈로그 순서로 한 개씩 발견
+        internal void RevealSearch(double progress)
+        {
+            // 진행률 1 이상이면 모든 재고, 그 전에는 진행률 비율만큼만 발견 목표 설정
+            int total = TotalStockCount;
+            int target = progress >= 1d ? total : (int)(total * Math.Max(0d, progress));
+            int found = 0;
+            bool isChanged = false;
+
+            for (int i = 0; i < stock.Length; i++)
+            {
+                found += Math.Min(revealed[i], stock[i]);
+            }
+
+            // 아직 찾지 않은 첫 아이템부터 한 개씩 발견해 목록이 하나씩 늘어나게 처리
+            for (int i = 0; i < stock.Length && found < target; i++)
+            {
+                while (revealed[i] < stock[i] && found < target)
+                {
+                    revealed[i]++;
+                    found++;
+                    isChanged = true;
+                }
+            }
+
+            // 진행률을 채우면 수색 완료로 기록하고 변경이 있을 때만 UI 버전 증가
+            if (progress >= 1d && !IsSearchComplete)
+            {
+                IsSearchComplete = true;
+                isChanged = true;
+            }
+
+            if (isChanged)
+            {
+                StockVersion++;
+            }
         }
 
 
