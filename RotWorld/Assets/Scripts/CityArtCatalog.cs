@@ -59,6 +59,77 @@ namespace RotWorld
         private static readonly Color32 CurbLight = new Color32(206, 204, 181, 255);
         private static readonly Color32 CurbShadow = new Color32(133, 135, 127, 255);
 
+        // 공용 건물 조각과 머티리얼 및 지면 깊이 정렬 규격
+        private const int BuildingAtlasRows = 8;
+        private const int MaximumMapSize = 1024;
+        private const int DepthStepsPerTile = 4;
+        private const int DepthStride = 4;
+        private const int FirstBuildingOrder = 8;
+        public const int MaximumBuildingHeight = 24;
+        [SerializeField] private Texture2D buildingAtlas;
+        [SerializeField] private Material buildingMaterial;
+        private Color32[] buildingPixels;
+        internal Material BuildingMaterial => buildingMaterial;
+
+        /// <summary>
+        /// 실제 건물 종류에 대응하는 표시용 외형 분류
+        /// </summary>
+        public enum BuildingCategory
+        {
+            Residential, Commercial, HighRise, Industrial, Public
+        }
+
+        /// <summary>
+        /// 공용 건물 시트의 16픽셀 조각 식별자
+        /// </summary>
+        public enum BuildingPart
+        {
+            None = -1, TerracottaRoof, SlateRoof, ConcreteRoof, MetalRoof, Ridge,
+            ResidentialWall, ShopWall, HighRiseWall, IndustrialWall, Parapet,
+            AirConditioner, Skylight, HouseDoor, GlassDoor, ShutterDoor, Windows,
+            RedSign, PharmacySign, BlueSign, CafeSign, HospitalSign, PoliceSign,
+            HealthSign, CivicSign, RestroomSign, GuardSign, HotelSign, OfficeWall,
+            WaterTank, Chimney, SolarPanels, Hatch
+        }
+
+        /// <summary>
+        /// 지도 생성 데이터와 분리한 건물 조각 및 높이와 색상 선택 결과
+        /// </summary>
+        public readonly struct BuildingStyle
+        {
+            // 조합할 원본 조각과 외형 높이 및 변형 식별
+            public BuildingCategory Category { get; }
+            public BuildingPart Roof { get; }
+            public BuildingPart Wall { get; }
+            public BuildingPart Door { get; }
+            public BuildingPart Sign { get; }
+            public BuildingPart Detail { get; }
+            public int Height { get; }
+            public int Variant { get; }
+            public bool IsPitched { get; }
+            public Color32 RoofTint { get; }
+
+            // 건물의 읽기 전용 조각 선택값 보관
+            internal BuildingStyle(BuildingCategory category, BuildingPart roof, BuildingPart wall, BuildingPart door,
+                BuildingPart sign, BuildingPart detail,
+                int height, int variant, bool isPitched)
+            {
+                // 도시 생성 난수와 독립적으로 결정된 표시 설정 전달
+                Category = category;
+                Roof = roof;
+                Wall = wall;
+                Door = door;
+                Sign = sign;
+                Detail = detail;
+                Height = height;
+                Variant = variant;
+                IsPitched = isPitched;
+                RoofTint = variant == 0 ? new Color32(255, 255, 255, 255)
+                    : isPitched ? new Color32(215, 231, 239, 255)
+                    : category == BuildingCategory.Industrial ? new Color32(180, 206, 224, 255) : new Color32(190, 212, 230, 255);
+            }
+        }
+
         /// <summary>
         /// 구역 합성 중 타일당 한 번 조회하는 도로 표시 입력
         /// </summary>
@@ -118,6 +189,17 @@ namespace RotWorld
             }
 
             roadPixels = roadAtlas.GetPixels32();
+
+            // 공용 건물 원본과 렌더링 머티리얼의 명시적 연결 검사
+            if (buildingAtlas == null || buildingAtlas.width != AtlasColumns * PixelsPerTile ||
+                buildingAtlas.height != BuildingAtlasRows * PixelsPerTile || !buildingAtlas.isReadable ||
+                buildingAtlas.filterMode != FilterMode.Point || buildingMaterial == null ||
+                buildingMaterial.shader == null || buildingMaterial.mainTexture != buildingAtlas)
+            {
+                throw new InvalidOperationException("건물 아틀라스 64×128 Point 설정과 공용 머티리얼 연결이 필요합니다");
+            }
+
+            buildingPixels = buildingAtlas.GetPixels32();
         }
 
 
@@ -131,7 +213,7 @@ namespace RotWorld
             hash ^= hash >> 15;
             byte tile = map.Tiles[y * map.Size + x];
 
-            if (tile == CityGenerator.Grass)
+            if (tile == CityGenerator.Grass || tile == CityGenerator.Building)
             {
                 return (int)(hash & 3u);
             }
@@ -504,6 +586,110 @@ namespace RotWorld
             int column = tileIndex % AtlasColumns;
             int row = RoadAtlasRows - 1 - tileIndex / AtlasColumns;
             return roadPixels[(row * PixelsPerTile + y) * AtlasColumns * PixelsPerTile + column * PixelsPerTile + x];
+        }
+
+
+        // 시드와 실제 종류 및 위치에서 건물 조합과 색상 변형 선택
+        public BuildingStyle GetBuildingStyle(int seed, CityBuilding building)
+        {
+            // 다른 도시 난수 흐름을 소비하지 않는 좌표와 종류 해시 구성
+            uint hash = unchecked((uint)seed ^ (uint)building.Bounds.x * HorizontalHashMultiplier ^
+                (uint)building.Bounds.y * VerticalHashMultiplier ^ (uint)building.Type * HashAvalancheMultiplier);
+            hash ^= hash >> 16;
+            hash = unchecked(hash * HashAvalancheMultiplier);
+            int variant = (int)((hash >> 15) & 1u);
+            BuildingType type = building.Type;
+            BuildingCategory category = type switch
+            {
+                BuildingType.DetachedHouse or BuildingType.Villa or BuildingType.CountryHouse or
+                    BuildingType.RiversideHouse or BuildingType.Cabin or BuildingType.CampsiteOffice or
+                    BuildingType.StaffDormitory => BuildingCategory.Residential,
+                BuildingType.Apartment or BuildingType.OfficeBuilding or BuildingType.Hotel or
+                    BuildingType.Hypermarket or BuildingType.DepartmentStore => BuildingCategory.HighRise,
+                BuildingType.FarmToolStorage or BuildingType.SmallWarehouse or BuildingType.Factory or
+                    BuildingType.LogisticsWarehouse or BuildingType.RepairShop => BuildingCategory.Industrial,
+                BuildingType.Hospital or BuildingType.PoliceStation or BuildingType.HealthCenter or
+                    BuildingType.VillageHall or BuildingType.PublicRestroom or BuildingType.Guardhouse or
+                    BuildingType.CoastalOutpost => BuildingCategory.Public,
+                BuildingType.Unspecified => building.Kind == 3 ? BuildingCategory.HighRise
+                    : building.Kind == 2 ? BuildingCategory.Industrial : BuildingCategory.Residential,
+                _ => BuildingCategory.Commercial
+            };
+            bool isPitched = category == BuildingCategory.Residential && type != BuildingType.Villa && type != BuildingType.StaffDormitory;
+            BuildingPart roof = isPitched ? (variant == 0 ? BuildingPart.TerracottaRoof : BuildingPart.SlateRoof)
+                : category == BuildingCategory.Industrial ? BuildingPart.MetalRoof : BuildingPart.ConcreteRoof;
+            BuildingPart wall = category == BuildingCategory.Industrial ? BuildingPart.IndustrialWall
+                : category == BuildingCategory.HighRise ? BuildingPart.HighRiseWall
+                : category == BuildingCategory.Commercial ? BuildingPart.ShopWall : BuildingPart.ResidentialWall;
+            BuildingPart door = category == BuildingCategory.Industrial ? BuildingPart.ShutterDoor
+                : isPitched ? BuildingPart.HouseDoor : BuildingPart.GlassDoor;
+            BuildingPart detail = isPitched ? (variant == 0 ? BuildingPart.Chimney : BuildingPart.SolarPanels)
+                : category == BuildingCategory.Industrial ? BuildingPart.AirConditioner : BuildingPart.Skylight;
+            BuildingPart sign = type switch
+            {
+                BuildingType.Pharmacy => BuildingPart.PharmacySign,
+                BuildingType.Hospital => BuildingPart.HospitalSign,
+                BuildingType.PoliceStation => BuildingPart.PoliceSign,
+                BuildingType.HealthCenter => BuildingPart.HealthSign,
+                BuildingType.VillageHall or BuildingType.CampsiteOffice => BuildingPart.CivicSign,
+                BuildingType.PublicRestroom => BuildingPart.RestroomSign,
+                BuildingType.Guardhouse or BuildingType.CoastalOutpost => BuildingPart.GuardSign,
+                BuildingType.Hotel => BuildingPart.HotelSign,
+                BuildingType.ConvenienceStore or BuildingType.Restaurant or BuildingType.RiversideRestaurant => BuildingPart.RedSign,
+                BuildingType.NeighborhoodMarket or BuildingType.HardwareStore or BuildingType.Cafe or
+                    BuildingType.RepairShop or BuildingType.ToolStore => BuildingPart.CafeSign,
+                BuildingType.SmallSupermarket or BuildingType.Hypermarket or BuildingType.DepartmentStore or
+                    BuildingType.FishingSupplyStore or BuildingType.WaterfrontOffice => BuildingPart.BlueSign,
+                _ => BuildingPart.None
+            };
+            int height = category == BuildingCategory.HighRise ? MaximumBuildingHeight
+                : category == BuildingCategory.Commercial || category == BuildingCategory.Public ? 12 : 8;
+
+            if (type == BuildingType.OfficeBuilding || type == BuildingType.WaterfrontOffice)
+            {
+                wall = BuildingPart.OfficeWall;
+            }
+
+            if (type == BuildingType.Hospital)
+            {
+                height = 20;
+                wall = BuildingPart.HighRiseWall;
+            }
+
+            if (type == BuildingType.Villa || type == BuildingType.StaffDormitory)
+            {
+                height = 12;
+                wall = BuildingPart.HighRiseWall;
+            }
+
+            return new BuildingStyle(category, roof, wall, door, sign, detail, height, variant, isPitched);
+        }
+
+
+        // 건물과 유닛이 공유하는 지면 좌표의 깊이 순서 계산
+        internal static int GetDepthOrder(float groundY)
+        {
+            // 1024 지도에서도 SpriteRenderer 순서 범위 안에 유형별 네 단계 여유 확보
+            int depth = Mathf.Clamp(Mathf.RoundToInt(groundY * DepthStepsPerTile), 0, MaximumMapSize * DepthStepsPerTile);
+            return FirstBuildingOrder + (MaximumMapSize * DepthStepsPerTile - depth) * DepthStride;
+        }
+
+
+        // 건물 조각 안의 잘라 쓰는 영역을 공용 아틀라스 좌표로 변환
+        internal RectInt GetBuildingRegion(BuildingPart part, RectInt section)
+        {
+            // 조각을 확대하지 않고 실제 원본 픽셀 크기로 반복할 영역 전달
+            int index = (int)part;
+            return new RectInt(index % AtlasColumns * PixelsPerTile + section.x,
+                (BuildingAtlasRows - 1 - index / AtlasColumns) * PixelsPerTile + section.y, section.width, section.height);
+        }
+
+
+        // 축소 지도 합성용 공용 건물 원본 픽셀 조회
+        internal Color32 GetBuildingPixel(int x, int y)
+        {
+            // 읽기 캐시에서 보간 없이 원본 색상과 투명도 전달
+            return buildingPixels[y * AtlasColumns * PixelsPerTile + x];
         }
 
 

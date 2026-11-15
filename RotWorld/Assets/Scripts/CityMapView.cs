@@ -138,10 +138,7 @@ namespace RotWorld
                     }
                 }
 
-                foreach (var building in map.Buildings)
-                {
-                    CityChunkRenderer.DrawBuilding(pixels, overviewSize, building, 0, 0, nextPixelsPerUnit / LegacyPixelsPerTile);
-                }
+                CityBuildingArt.PaintOverview(map, terrainArt, pixels, overviewSize, nextPixelsPerUnit);
 
                 nextOverview.Apply(false, true);
                 nextOverviewSprite = Sprite.Create(nextOverview, new Rect(0, 0, overviewSize, overviewSize),
@@ -450,10 +447,25 @@ namespace RotWorld
             const float MinimumClickSize = 12f;
             UnitWander closest = null;
             float closestDistance = float.PositiveInfinity;
+            Vector2 localClick = transform.InverseTransformPoint(viewCamera.ScreenToWorldPoint(screenPosition));
+            CityBuilding occluder = terrainRenderer != null ? terrainRenderer.GetBuildingAt(localClick) : null;
+
+            if (occluder != null && !terrainRenderer.IsBuildingBodyVisible(occluder))
+            {
+                // 축소 지도 위에 표시되는 유닛의 기존 선택 우선순위 유지
+                occluder = null;
+            }
 
             foreach (var human in mapData.HumanUnits.Values)
             {
                 if (human == null || !human.isActiveAndEnabled || !human.IsHumanTarget)
+                {
+                    continue;
+                }
+
+                // 지붕 뒤에 가려진 인물이 건물 클릭을 가로채는 상황 방지
+                if (occluder != null && CityArtCatalog.GetDepthOrder(human.transform.localPosition.y) +
+                    UnitWalkAnimation.LivingSortingOffset < CityArtCatalog.GetDepthOrder(occluder.Bounds.yMin))
                 {
                     continue;
                 }
@@ -486,19 +498,18 @@ namespace RotWorld
                 return null;
             }
 
-            // 지도 부모 변환을 적용한 클릭 타일과 건물 바닥 대조
+            // 지도 부모 변환 후 기존 구역 인덱스에서 바닥과 확장 지붕 조회
             Vector2 local = transform.InverseTransformPoint(viewCamera.ScreenToWorldPoint(screenPosition));
-            var tile = new Vector2Int(Mathf.FloorToInt(local.x), Mathf.FloorToInt(local.y));
+            return terrainRenderer != null ? terrainRenderer.GetBuildingAt(local) : null;
+        }
 
-            foreach (var building in mapData.Buildings)
-            {
-                if (building.Bounds.Contains(tile))
-                {
-                    return building;
-                }
-            }
 
-            return null;
+        // 건물 정보창을 새 지붕 위에 배치할 표시 상단 조회
+        internal float GetBuildingVisualTop(CityBuilding building)
+        {
+            // 논리 Bounds를 바꾸지 않고 제한된 외형 높이만 더하기
+            var style = terrainArt.GetBuildingStyle(mapData.Seed, building);
+            return building.Bounds.yMax + style.Height / (float)PixelsPerTile;
         }
 
 

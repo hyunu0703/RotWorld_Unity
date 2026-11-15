@@ -31,6 +31,7 @@ namespace RotWorld
         private SpriteRenderer visual;
         private int humanSortingOrder;
         private bool isZombieVisual;
+        private bool isDownedVisual;
         internal const int LivingSortingOffset = 2;
         private const int ZombieSortingOffset = 1;
         private const int CorpseSortingOffset = -1;
@@ -65,6 +66,7 @@ namespace RotWorld
         {
             // 이동 초기화에서 전달한 건물 타일 참조 보관
             this.map = map;
+            RefreshDepthOrder();
         }
 
 
@@ -111,7 +113,8 @@ namespace RotWorld
         {
             // 살아 있는 좀비는 인간보다 앞에 렌더링하고 변환 시 시체 표시 순서 복원
             isZombieVisual = zombie;
-            visual.sortingOrder = humanSortingOrder + (zombie ? ZombieSortingOffset : 0);
+            isDownedVisual = false;
+            RefreshDepthOrder();
             isHitVisible = false;
             visual.color = Color.white;
         }
@@ -121,7 +124,8 @@ namespace RotWorld
         internal void SetDownedSortingOrder()
         {
             // 지도 위에 확보된 시체 표시 순서로 전환
-            visual.sortingOrder = humanSortingOrder + CorpseSortingOffset;
+            isDownedVisual = true;
+            RefreshDepthOrder();
         }
 
 
@@ -310,8 +314,29 @@ namespace RotWorld
                 offset.y += Mathf.Clamp(bounds.yMin, tile.y + VisualMargin, tile.y + 1f - bounds.height - VisualMargin) - bounds.yMin;
             }
 
+            // 건물과 같은 지면 기준으로 표시 순서만 갱신
+            RefreshDepthOrder();
             visual.transform.localRotation = rotation;
             visual.transform.localPosition = offset;
+        }
+
+
+        // 기존 개체 유형별 우선순위를 지면 깊이 순서에 합성
+        private void RefreshDepthOrder()
+        {
+            // 초기화 전 접근은 보류하고 논리 이동 좌표에서만 깊이 계산
+            if (visual == null)
+            {
+                return;
+            }
+
+            if (map != null)
+            {
+                humanSortingOrder = CityArtCatalog.GetDepthOrder(transform.localPosition.y) + LivingSortingOffset;
+            }
+
+            int offset = isDownedVisual ? CorpseSortingOffset : isZombieVisual ? ZombieSortingOffset : 0;
+            visual.sortingOrder = humanSortingOrder + offset;
         }
 
 

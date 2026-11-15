@@ -14,3 +14,5 @@ MonoBehaviour:
   m_EditorClassIdentifier:
   terrainAtlas: {fileID: 2800000, guid: e890de05065c4966bc5928fca49e61ad, type: 3}
   roadAtlas: {fileID: 2800000, guid: 2b9dd5fa17354df0b234cef90e211b24, type: 3}
+  buildingAtlas: {fileID: 2800000, guid: 5073e8ca16e84da88cf10fab31234567, type: 3}
+  buildingMaterial: {fileID: 2100000, guid: b43274583fa646eb9c4d978e31234567, type: 2}

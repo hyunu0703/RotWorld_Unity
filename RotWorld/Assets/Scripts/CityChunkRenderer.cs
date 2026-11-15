@@ -6,7 +6,7 @@ using UnityEngine;
 namespace RotWorld
 {
     /// <summary>
-    /// 화면 주변 지형과 도로 구역의 지연 생성 및 상한 캐시와 기존 건물 합성
+    /// 화면 주변 지형과 도로 및 건물 본체의 구역별 생성과 상한 캐시 관리
     /// </summary>
     internal sealed class CityChunkRenderer : IDisposable
     {
@@ -14,9 +14,8 @@ namespace RotWorld
         internal const int ChunkTiles = 32;
         internal const int MaximumCachedChunks = 64;
         private const int ChunksPerFrame = 2;
-        private const int LegacyPixelsPerTile = 8;
-        private const int PixelScale = CityArtCatalog.PixelsPerTile / LegacyPixelsPerTile;
         private const int ChunkPixels = ChunkTiles * CityArtCatalog.PixelsPerTile;
+        private const int RoofTileAllowance = 2;
 
         // 고정 지도와 지형 참조 및 생성 구역의 부모
         private readonly CityMap map;
@@ -40,6 +39,7 @@ namespace RotWorld
             internal Texture2D Texture;
             internal Sprite Sprite;
             internal long LastUse;
+            internal readonly List<Mesh> BuildingMeshes = new List<Mesh>();
         }
 
 
@@ -60,11 +60,11 @@ namespace RotWorld
 
             foreach (var building in map.Buildings)
             {
-                // 기존 우하단 그림자까지 포함하는 인접 구역 후보 등록
+                // 지붕의 위쪽 확장과 우하단 그림자까지 포함하는 공간 인덱스 등록
                 int minX = Mathf.Max(0, building.Bounds.xMin - 1) / ChunkTiles;
                 int minY = Mathf.Max(0, building.Bounds.yMin - 1) / ChunkTiles;
                 int maxX = Mathf.Min(map.Size - 1, building.Bounds.xMax + 1) / ChunkTiles;
-                int maxY = Mathf.Min(map.Size - 1, building.Bounds.yMax + 1) / ChunkTiles;
+                int maxY = Mathf.Min(map.Size - 1, building.Bounds.yMax + RoofTileAllowance) / ChunkTiles;
 
                 for (int y = minY; y <= maxY; y++)
                 {
@@ -210,6 +210,7 @@ namespace RotWorld
                 var renderer = chunk.Object.AddComponent<SpriteRenderer>();
                 renderer.sprite = chunk.Sprite;
                 renderer.sortingOrder = sortingOrder;
+                CreateBuildingBodies(key, chunk);
                 return chunk;
             }
             catch
@@ -220,7 +221,7 @@ namespace RotWorld
         }
 
 
-        // 원본 지형과 도로를 16픽셀 격자로 합성한 뒤 기존 건물 표시
+        // 원본 지형과 도로 및 건물 아래 그림자와 문턱 합성
         private void PaintChunk(Vector2Int key, NativeArray<Color32> pixels)
         {
             // 구역 경계를 넘어도 같은 전역 좌표와 이웃을 사용하는 지형 선택
@@ -236,7 +237,7 @@ namespace RotWorld
                     int index = y * map.Size + x;
                     byte tile = map.Tiles[index];
                     bool isTerrain = tile == CityGenerator.Grass || tile == CityGenerator.Sand ||
-                        tile == CityGenerator.Ocean || tile == CityGenerator.Shallows || tile == CityGenerator.River;
+                        tile == CityGenerator.Ocean || tile == CityGenerator.Shallows || tile == CityGenerator.River || tile == CityGenerator.Building;
                     bool isStreet = CityArtCatalog.IsStreet(tile);
                     int tileIndex = art.GetTileIndex(map, x, y);
                     int coast = isTerrain ? art.GetCoastMask(map, x, y) : 0;
@@ -259,9 +260,77 @@ namespace RotWorld
             {
                 foreach (var building in candidates)
                 {
-                    DrawBuilding(pixels, ChunkPixels, building, originX, originY);
+                    CityBuildingArt.PaintGround(art, building, map.Seed, pixels, ChunkPixels, new Vector2Int(originX, originY));
                 }
             }
+        }
+
+
+        // 소유 구역에서만 건물 본체를 생성해 중복 표시 방지
+        private void CreateBuildingBodies(Vector2Int key, Chunk chunk)
+        {
+            // 미리 구성한 구역별 인덱스의 건물만 조회
+            if (!buildings.TryGetValue(key, out List<CityBuilding> candidates))
+            {
+                return;
+            }
+
+            foreach (var building in candidates)
+            {
+                Vector2Int owner = Vector2Int.FloorToInt(building.Bounds.center / ChunkTiles);
+
+                if (owner != key)
+                {
+                    continue;
+                }
+
+                Mesh mesh = CityBuildingArt.CreateMesh(art, building, map.Seed);
+                chunk.BuildingMeshes.Add(mesh);
+                var body = new GameObject($"Building {building.Type} {building.Bounds.x},{building.Bounds.y}");
+                body.transform.SetParent(chunk.Object.transform, false);
+                body.transform.localPosition = new Vector3(building.Bounds.x - key.x * ChunkTiles, building.Bounds.y - key.y * ChunkTiles, 0);
+                body.AddComponent<MeshFilter>().sharedMesh = mesh;
+                var renderer = body.AddComponent<MeshRenderer>();
+                renderer.sharedMaterial = art.BuildingMaterial;
+                renderer.sortingOrder = CityArtCatalog.GetDepthOrder(building.Bounds.yMin);
+            }
+        }
+
+
+        // 해당 건물의 상세 본체가 현재 활성 구역에 표시되는지 조회
+        internal bool IsBuildingBodyVisible(CityBuilding building)
+        {
+            // 전체 보기와 지연 생성 중인 건물은 축소 이미지 표시로 구분
+            Vector2Int owner = Vector2Int.FloorToInt(building.Bounds.center / ChunkTiles);
+            return chunks.TryGetValue(owner, out Chunk chunk) && chunk.Object != null && chunk.Object.activeInHierarchy;
+        }
+
+
+        // 공간 인덱스에서 실제 바닥과 확장 지붕의 최상단 건물 조회
+        internal CityBuilding GetBuildingAt(Vector2 position)
+        {
+            // 전체 목록 탐색 없이 클릭 위치가 속한 구역의 후보만 검사
+            var key = Vector2Int.FloorToInt(position / ChunkTiles);
+
+            if (!buildings.TryGetValue(key, out List<CityBuilding> candidates))
+            {
+                return null;
+            }
+
+            CityBuilding selected = null;
+
+            foreach (var building in candidates)
+            {
+                var style = art.GetBuildingStyle(map.Seed, building);
+
+                if (CityBuildingArt.GetVisualBounds(building, style).Contains(position) &&
+                    (selected == null || building.Bounds.yMin < selected.Bounds.yMin))
+                {
+                    selected = building;
+                }
+            }
+
+            return selected;
         }
 
 
@@ -287,6 +356,13 @@ namespace RotWorld
                 UnityEngine.Object.Destroy(chunk.Texture);
                 chunk.Texture = null;
             }
+
+            foreach (Mesh mesh in chunk.BuildingMeshes)
+            {
+                UnityEngine.Object.Destroy(mesh);
+            }
+
+            chunk.BuildingMeshes.Clear();
         }
 
 
@@ -308,76 +384,6 @@ namespace RotWorld
 
             chunks.Clear();
             buildings.Clear();
-        }
-
-
-        // 기존 건물의 색상과 창문 및 출입구 도형을 구역 좌표로 변환
-        internal static void DrawBuilding(NativeArray<Color32> pixels, int stride, CityBuilding building, int originX, int originY, float pixelScale = PixelScale)
-        {
-            // 건물 필지를 픽셀 좌표로 환산한 뒤 외형과 출입구 표시
-            var r = building.Bounds;
-            int x = (r.x - originX) * LegacyPixelsPerTile;
-            int y = (r.y - originY) * LegacyPixelsPerTile;
-            int w = r.width * LegacyPixelsPerTile;
-            int h = r.height * LegacyPixelsPerTile;
-            Color32 roof = building.Kind == 0 ? Hex(0x9d604b) : building.Kind == 1 ? Hex(0x64848b)
-                : building.Kind == 3 ? Hex(0x596977) : building.Kind == 4 ? Hex(0x789b96) : Hex(0x8a8890);
-            Fill(pixels, stride, x + 2, y - 2, w, h, Hex(0x424b40), pixelScale);
-            Fill(pixels, stride, x, y, w, h, Hex(0x353e3f), pixelScale);
-            Fill(pixels, stride, x + 1, y + 1, w - 2, 6, Hex(0xc1b494), pixelScale);
-            Fill(pixels, stride, x + 1, y + 7, w - 2, h - 8, roof, pixelScale);
-            Fill(pixels, stride, x + 3, y + h - 3, w - 6, 1, Hex(0xc2b194), pixelScale);
-
-            for (int wx = x + 5; wx < x + w - 4; wx += 9)
-            {
-                Fill(pixels, stride, wx, y + 2, 3, 3, Hex(0x465c67), pixelScale);
-            }
-
-            if (building.Kind == 0)
-            {
-                Fill(pixels, stride, x + 2, y + h / 2, w - 4, 2, Hex(0x794c40), pixelScale);
-                Fill(pixels, stride, x + w - 10, y + h - 10, 4, 6, Hex(0x555453), pixelScale);
-            }
-            else
-            {
-                Fill(pixels, stride, x + w / 2, y + h / 2, 7, 5, Hex(0xb4b8ad), pixelScale);
-                Fill(pixels, stride, x + 3, y + 7, w - 6, 2, building.Kind == 1 ? Hex(0xb69a56) : Hex(0x666975), pixelScale);
-            }
-
-            if (building.Kind == 3)
-            {
-                for (int floorY = y + 9; floorY < y + h - 3; floorY += 6)
-                {
-                    for (int wx = x + 4; wx < x + w - 3; wx += 6)
-                    {
-                        Fill(pixels, stride, wx, floorY, 2, 2, Hex(0xb8c5bc), pixelScale);
-                    }
-                }
-            }
-
-            // 생성 데이터의 실제 출입구 위치를 지붕 위에 표시
-            int doorX = (building.Door.x - originX) * LegacyPixelsPerTile;
-            int doorY = (building.Door.y - originY) * LegacyPixelsPerTile;
-            Fill(pixels, stride, doorX + 2, doorY + 2, 4, 4, Hex(0xd1c6a0), pixelScale);
-        }
-
-
-        // 기존 시설 사각형을 출력 격자로 변환해 경계 안에 채우기
-        private static void Fill(NativeArray<Color32> pixels, int stride, int x, int y, int width, int height, Color32 color, float pixelScale)
-        {
-            // 원본 8픽셀 격자의 영역을 출력 픽셀 중심에서 샘플링
-            int minX = Mathf.Max(0, Mathf.CeilToInt(x * pixelScale - .5f));
-            int minY = Mathf.Max(0, Mathf.CeilToInt(y * pixelScale - .5f));
-            int maxX = Mathf.Min(stride, Mathf.CeilToInt((x + width) * pixelScale - .5f));
-            int maxY = Mathf.Min(stride, Mathf.CeilToInt((y + height) * pixelScale - .5f));
-
-            for (int py = minY; py < maxY; py++)
-            {
-                for (int px = minX; px < maxX; px++)
-                {
-                    pixels[py * stride + px] = color;
-                }
-            }
         }
 
 

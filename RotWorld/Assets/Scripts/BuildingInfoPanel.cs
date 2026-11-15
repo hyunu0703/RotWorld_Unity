@@ -130,7 +130,7 @@ namespace RotWorld
         {
             // 외형의 상단 경계에 맞춰 지도 부모 변환과 카메라 줌 반영
             var bounds = selectedBuilding.Bounds;
-            var top = new Vector3(bounds.center.x, bounds.yMax, 0f);
+            var top = new Vector3(bounds.center.x, mapView.GetBuildingVisualTop(selectedBuilding), 0f);
             Vector3 screenPosition = worldCamera.WorldToScreenPoint(mapView.transform.TransformPoint(top));
 
             if (screenPosition.z <= 0f || !worldCamera.pixelRect.Contains(screenPosition))
