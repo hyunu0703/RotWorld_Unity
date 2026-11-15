@@ -161,9 +161,17 @@ namespace RotWorld
         }
 
 
-        // 입구 도착 시 건물 시야의 좀비 수로 진입 여부 결정
+        // 입구 도착 시 정원과 건물 시야의 좀비 수로 진입 여부 결정
         internal bool ShouldEnter(CityBuilding building, int zombiesInView)
         {
+            // 이동 중 정원이 찬 정착 후보는 위험 표시 없이 목표만 해제하고 바로 다른 주거 시설 재검색
+            if (CurrentGoal == Goal.Shelter && building == Target && building != Settlement && building.IsSettlementFull)
+            {
+                Target = null;
+                nextSearchTime = 0f;
+                return false;
+            }
+
             // 새 정착 후보는 좀비가 보이면 위험 표시하고 정착지는 이주 기준 이상일 때만 포기
             if (building == Settlement ? zombiesInView >= AbandonZombieCount : CurrentGoal == Goal.Shelter && zombiesInView > 0)
             {
@@ -178,11 +186,12 @@ namespace RotWorld
         // 건물 진입 시 정착지 확정과 체류 시간 초기화
         internal void OnEntered(CityBuilding building, bool hiding)
         {
-            // 정착지 탐색 목표에 들어온 경우만 새 정착지로 확정
+            // 정착지 탐색 목표에 들어왔고 정원이 남은 경우만 새 정착지로 확정
             stayElapsed = 0d;
             isHiding = hiding && building != Target && building != Settlement;
 
-            if (!isHiding && Settlement == null && BuildingCatalog.IsResidential(building.Type) && building == Target)
+            if (!isHiding && Settlement == null && BuildingCatalog.IsResidential(building.Type) && building == Target &&
+                !building.IsSettlementFull)
             {
                 SetSettlement(building);
                 abandonedThreat = null;
@@ -309,7 +318,7 @@ namespace RotWorld
         }
 
 
-        // 정착지 교체와 건물별 정착 인원 증감
+        // 정착지 교체와 건물별 정착 인원 증감 및 거점 갱신
         private void SetSettlement(CityBuilding building)
         {
             // 같은 정착지 재지정 시 인원 중복 증가 방지
@@ -318,16 +327,22 @@ namespace RotWorld
                 return;
             }
 
-            if (Settlement != null)
+            // 이전 정착지 인원 반환 후 거점 기준 재판정
+            CityBuilding previous = Settlement;
+
+            if (previous != null)
             {
-                Settlement.RemoveSettler();
+                previous.RemoveSettler();
+                map.Bases.Refresh(previous);
             }
 
             Settlement = building;
 
+            // 새 정착지 인원 증가 후 거점 생성 여부 판정
             if (building != null)
             {
                 building.AddSettler();
+                map.Bases.Refresh(building);
             }
         }
 
@@ -385,7 +400,7 @@ namespace RotWorld
         }
 
 
-        // 위험하지 않은 가장 가까운 주거 시설 선택과 이주 시 좀비 방향 회피
+        // 정원이 남고 위험하지 않은 가장 가까운 주거 시설 선택과 이주 시 좀비 방향 회피
         private CityBuilding FindShelter(Vector2 position)
         {
             // 이주 직후에는 좀비 반대 방향 후보를 먼저 찾고 없으면 전체 후보 사용
@@ -397,7 +412,7 @@ namespace RotWorld
         // 방향 조건을 적용한 가장 가까운 주거 시설 조회
         private CityBuilding FindShelter(Vector2 position, Vector2? threat)
         {
-            // 위협 방향과 같은 쪽의 후보는 제외
+            // 정원이 찬 건물과 위협 방향과 같은 쪽의 후보는 제외
             CityBuilding best = null;
             float bestDistance = float.PositiveInfinity;
             Vector2 threatDirection = threat.HasValue ? threat.Value - position : Vector2.zero;
@@ -406,7 +421,7 @@ namespace RotWorld
             {
                 Vector2 offset = (Vector2)building.Door - position;
 
-                if (!BuildingCatalog.IsResidential(building.Type) || IsDangerous(building) ||
+                if (!BuildingCatalog.IsResidential(building.Type) || building.IsSettlementFull || IsDangerous(building) ||
                     (threat.HasValue && Vector2.Dot(offset, threatDirection) > 0f))
                 {
                     continue;

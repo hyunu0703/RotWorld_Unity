@@ -13,8 +13,9 @@ namespace RotWorld
         internal const double EmergencyThreshold = 40d;
         internal const double SatisfiedThreshold = 80d;
 
-        // 정착 인원 1명당 정착지 저장 용량 대비 비축 목표 비율
-        private const double ReservePerSettlerRatio = .5d;
+        // 첫 정착 인원의 저장 용량 대비 비축 목표 백분율과 최대 백분율
+        private const int FirstSettlerReservePercent = 50;
+        private const int MaximumReservePercent = 100;
 
         // 소유 인간의 생존 수치와 소지품
         private readonly HumanNeeds needs;
@@ -71,17 +72,27 @@ namespace RotWorld
         }
 
 
-        // 정착 인원과 저장 용량 기준 정착지 비축 목표 조회
+        // 정착 인원과 건물 종류별 증가율 기준 정착지 비축 목표 조회
         internal static int GetReserveTarget(CityBuilding settlement)
         {
-            // 1인당 용량 절반을 올림한 뒤 인원수만큼 늘리고 용량을 넘기지 않음
+            // 정착지 누락 차단과 정착 인원이 없으면 비축 목표 없음
             if (settlement == null)
             {
                 throw new ArgumentNullException(nameof(settlement));
             }
 
-            int perSettler = (int)Math.Ceiling(settlement.StorageCapacity * ReservePerSettlerRatio);
-            return Math.Min(settlement.StorageCapacity, perSettler * settlement.SettlerCount);
+            if (settlement.SettlerCount <= 0)
+            {
+                return 0;
+            }
+
+            // 첫 인원 50%에 추가 인원마다 종류별 백분율을 더하고 저장 용량 100%를 넘기지 않음
+            int stepPercent = BuildingCatalog.GetReserveStepPercent(settlement.Type);
+            int percent = Math.Min(MaximumReservePercent,
+                FirstSettlerReservePercent + stepPercent * (settlement.SettlerCount - 1));
+
+            // 부동소수 오차 없이 정수 백분율로 올림
+            return (settlement.StorageCapacity * percent + MaximumReservePercent - 1) / MaximumReservePercent;
         }
 
 

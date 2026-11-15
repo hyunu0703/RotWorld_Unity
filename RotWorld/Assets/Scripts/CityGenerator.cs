@@ -76,19 +76,21 @@ namespace RotWorld
         // 인간이 수색으로 찾아낸 아이템 종류별 개수
         private readonly int[] revealed;
 
-        // 주거 시설의 음식·음료 저장 한도와 이 건물을 정착지로 둔 인간 수
+        // 주거 시설의 음식·음료 저장 한도와 정착 인원 상한 및 이 건물을 정착지로 둔 인간 수
         public int StorageCapacity { get; }
+        public int SettlerCapacity { get; }
         public int SettlerCount { get; private set; }
+        public bool IsSettlementFull => SettlerCount >= SettlerCapacity;
 
         // 인간이 한 번이라도 들어가 수색을 시작했는지와 모든 재고를 찾아냈는지 여부
         public bool IsSearched { get; private set; }
         public bool IsSearchComplete { get; private set; }
 
-        // 생성된 필지와 재고 및 저장 용량 연결
+        // 생성된 필지와 재고 및 저장 용량과 정원 연결
         public CityBuilding(RectInt bounds, Vector2Int door, int kind, int[] stock, BuildingType type = BuildingType.Unspecified,
-            int storageCapacity = 0)
+            int storageCapacity = 0, int settlerCapacity = 0)
         {
-            // 재고 배열 누락과 음수 용량 차단
+            // 재고 배열 누락과 음수 용량·정원 차단
             if (stock == null)
             {
                 throw new ArgumentNullException(nameof(stock));
@@ -97,6 +99,11 @@ namespace RotWorld
             if (storageCapacity < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(storageCapacity));
+            }
+
+            if (settlerCapacity < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(settlerCapacity));
             }
 
             // 생성 결과의 필지와 출입구 및 외부 수정 방지 재고 목록 보관
@@ -108,6 +115,7 @@ namespace RotWorld
             Stock = Array.AsReadOnly(stock);
             revealed = new int[stock.Length];
             StorageCapacity = storageCapacity;
+            SettlerCapacity = settlerCapacity;
         }
 
 
@@ -187,16 +195,16 @@ namespace RotWorld
         // 출입구만 바꾼 같은 건물 생성
         internal CityBuilding WithDoor(Vector2Int door)
         {
-            // 출입 통로 확보 결과 반영 시 재고와 용량 유지
-            return new CityBuilding(Bounds, door, Kind, stock, Type, StorageCapacity);
+            // 출입 통로 확보 결과 반영 시 재고와 용량 및 정원 유지
+            return new CityBuilding(Bounds, door, Kind, stock, Type, StorageCapacity, SettlerCapacity);
         }
 
 
         // 종류만 바꾼 같은 건물 생성
         internal CityBuilding WithType(BuildingType type)
         {
-            // 종류 배정 결과 반영 시 재고와 용량 유지
-            return new CityBuilding(Bounds, Door, Kind, stock, type, StorageCapacity);
+            // 종류 배정 결과 반영 시 재고와 용량 및 정원 유지
+            return new CityBuilding(Bounds, Door, Kind, stock, type, StorageCapacity, SettlerCapacity);
         }
 
 
@@ -334,6 +342,9 @@ namespace RotWorld
 
         // 건물 내부 인간 집합과 출입구 주변 조회
         public BuildingOccupancy Occupancy { get; }
+
+        // 정착 인원 기준 거점 목록과 영역·색
+        public SettlementBases Bases { get; }
         public int ZombieCount => Zombies.Count - InactiveZombies.Count;
         public event Action PopulationChanged;
 
@@ -600,6 +611,7 @@ namespace RotWorld
             HumanQueries = new UnitQueryIndex(HumanUnits);
             ZombieQueries = new UnitQueryIndex(ZombieUnits);
             Occupancy = new BuildingOccupancy(this);
+            Bases = new SettlementBases(size, seed);
         }
     }
 

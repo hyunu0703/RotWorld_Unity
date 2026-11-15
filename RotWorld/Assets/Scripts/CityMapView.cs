@@ -37,6 +37,9 @@ namespace RotWorld
         private CityArtCatalog terrainArt;
         private CityChunkRenderer terrainRenderer;
 
+        // 지도별 거점 영역 표시 자원 소유
+        private SettlementBaseRenderer baseRenderer;
+
         // 전체 보기 그래픽 자원. 0번은 타일당 1픽셀, 이후 단계마다 절반 해상도
         private Texture2D[] overviewTextures;
         private Sprite[] overviewSprites;
@@ -154,6 +157,7 @@ namespace RotWorld
             summonedUnits = new GameObject("Summoned Units").transform;
             summonedUnits.SetParent(transform, false);
             terrainRenderer = nextRenderer;
+            baseRenderer = new SettlementBaseRenderer(map, transform);
             overviewTextures = nextTextures;
             overviewSprites = nextSprites;
             minZoom = -extraSteps;
@@ -446,13 +450,19 @@ namespace RotWorld
         }
 
 
-        // 입력과 카메라 변경 이후 화면 주변 지형 구역 갱신
+        // 입력과 카메라 변경 이후 화면 주변 지형 구역과 거점 영역 갱신
         private void LateUpdate()
         {
             // 카메라 입력 중단 상태와 독립적인 지연 생성 및 캐시 표시 처리
             if (terrainRenderer != null)
             {
                 terrainRenderer.UpdateVisible(viewCamera, zoom > 0);
+            }
+
+            // 거점 목록이나 줌 배율이 바뀐 경우만 영역 표시 갱신
+            if (baseRenderer != null)
+            {
+                baseRenderer.Refresh(viewCamera);
             }
         }
 
@@ -911,6 +921,12 @@ namespace RotWorld
             {
                 terrainRenderer.Dispose();
                 terrainRenderer = null;
+            }
+
+            if (baseRenderer != null)
+            {
+                baseRenderer.Dispose();
+                baseRenderer = null;
             }
 
             DestroyOverviews(overviewTextures, overviewSprites);

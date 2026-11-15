@@ -1011,7 +1011,7 @@ namespace RotWorld
         // 지역별 바닥 크기의 최소 규격과 미포함 상한 조회
         private static void GetSizeRange(CityRegion region, out Vector2Int minimum, out Vector2Int limit)
         {
-            // 건물 배치와 정착지 저장 용량 보정이 함께 쓰는 단일 규격표
+            // 건물 배치와 정착지 저장 용량·정원 보정이 함께 쓰는 단일 규격표
             switch (region)
             {
                 case CityRegion.Downtown:
@@ -1283,7 +1283,7 @@ namespace RotWorld
         }
 
 
-        // 종류 배정이 끝난 건물 목록 순서대로 종류별 재고와 정착지 저장 용량 생성
+        // 종류 배정이 끝난 건물 목록 순서대로 종류별 재고와 정착지 저장 용량 및 정원 생성
         private void AssignStock()
         {
             // 재고 전용 난수 흐름만 사용해 지형과 종류 배정 결과 보존
@@ -1291,25 +1291,27 @@ namespace RotWorld
             {
                 var building = mapData.Buildings[b];
                 int[] stock = BuildingStockTable.Create(building.Type, stockRandom, settingsData.Supplies);
-                int capacity = GetStorageCapacity(building);
-                mapData.Buildings[b] = new CityBuilding(building.Bounds, building.Door, building.Kind, stock, building.Type, capacity);
+                GetAreaRange(building, out int minimumArea, out int maximumArea);
+                int area = building.Bounds.width * building.Bounds.height;
+
+                // 주거 시설 외 건물은 카탈로그에서 용량과 정원 모두 0 반환
+                int capacity = BuildingCatalog.GetStorageCapacity(building.Type, area, minimumArea, maximumArea);
+                int settlerCapacity = BuildingCatalog.GetSettlerCapacity(building.Type, area, minimumArea, maximumArea);
+                mapData.Buildings[b] = new CityBuilding(building.Bounds, building.Door, building.Kind, stock, building.Type,
+                    capacity, settlerCapacity);
             }
         }
 
 
-        // 건물이 속한 지역의 필지 규격 범위로 저장 용량 계산
-        private int GetStorageCapacity(CityBuilding building)
+        // 건물이 속한 지역의 필지 규격 범위로 최소·최대 면적 계산
+        private void GetAreaRange(CityBuilding building, out int minimumArea, out int maximumArea)
         {
             // 필지 중심 타일의 지역 규격에서 최소·최대 면적 산출
             var center = building.Bounds.center;
             var region = mapData.Regions[(int)center.y * mapSize + (int)center.x];
             GetSizeRange(region, out var minimum, out var limit);
-            int minimumArea = minimum.x * minimum.y;
-            int maximumArea = (limit.x - 1) * (limit.y - 1);
-            int area = building.Bounds.width * building.Bounds.height;
-
-            // 주거 시설 외 건물은 카탈로그에서 0 반환
-            return BuildingCatalog.GetStorageCapacity(building.Type, area, minimumArea, maximumArea);
+            minimumArea = minimum.x * minimum.y;
+            maximumArea = (limit.x - 1) * (limit.y - 1);
         }
 
 

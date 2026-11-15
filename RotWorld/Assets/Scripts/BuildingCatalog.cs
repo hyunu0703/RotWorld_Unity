@@ -56,9 +56,9 @@ namespace RotWorld
         private const uint SeedHashMultiplier = 73856093u;
         private const uint RegionHashMultiplier = 19349663u;
 
-        // 정착지 저장 용량의 필지 크기 보정 범위
-        private const float MinimumStorageScale = .75f;
-        private const float StorageScaleRange = .5f;
+        // 정착지 저장 용량과 정원의 필지 크기 보정 범위
+        private const float MinimumSizeScale = .75f;
+        private const float SizeScaleRange = .5f;
         private const float NeutralSizeRatio = .5f;
 
         // 주거 시설 종류별 정착지 저장 기본 용량
@@ -69,6 +69,24 @@ namespace RotWorld
         private const int VillaStorage = 30;
         private const int StaffDormitoryStorage = 40;
         private const int ApartmentStorage = 50;
+
+        // 주거 시설 종류별 기본 정원
+        private const int CabinSettlers = 2;
+        private const int CountryHouseSettlers = 3;
+        private const int DetachedHouseSettlers = 4;
+        private const int RiversideHouseSettlers = 4;
+        private const int VillaSettlers = 6;
+        private const int StaffDormitorySettlers = 10;
+        private const int ApartmentSettlers = 12;
+
+        // 주거 시설 종류별 추가 정착 인원 1명당 비축 목표 증가 백분율
+        private const int CabinReserveStep = 25;
+        private const int CountryHouseReserveStep = 25;
+        private const int DetachedHouseReserveStep = 20;
+        private const int RiversideHouseReserveStep = 20;
+        private const int VillaReserveStep = 15;
+        private const int StaffDormitoryReserveStep = 10;
+        private const int ApartmentReserveStep = 10;
 
         // 소규모 생활권 구성 기준과 실제 바다 인접 판정 거리
         private const int SmallGroupLimit = 3;
@@ -537,10 +555,50 @@ namespace RotWorld
         // 주거 시설 기본값과 필지 크기 보정으로 정착지 저장 용량 계산
         public static int GetStorageCapacity(BuildingType type, int area, int minimumArea, int maximumArea)
         {
-            // 주거 시설이 아니면 저장 용량 없음
-            int baseCapacity = GetStorageBase(type);
+            // 주거 시설이 아니면 기본값 0으로 저장 용량 없음
+            return ScaleBySize(GetStorageBase(type), area, minimumArea, maximumArea);
+        }
 
-            if (baseCapacity == 0)
+
+        // 주거 시설 기본 정원과 필지 크기 보정으로 정착 인원 상한 계산
+        public static int GetSettlerCapacity(BuildingType type, int area, int minimumArea, int maximumArea)
+        {
+            // 저장 용량과 같은 필지 보정을 적용하고 주거 시설이 아니면 정원 없음
+            return ScaleBySize(GetSettlerBase(type), area, minimumArea, maximumArea);
+        }
+
+
+        // 추가 정착 인원 1명당 비축 목표 증가 백분율 조회
+        public static int GetReserveStepPercent(BuildingType type)
+        {
+            // 주거 시설 일곱 종류 외에는 증가 없음
+            switch (type)
+            {
+                case BuildingType.Cabin:
+                    return CabinReserveStep;
+                case BuildingType.CountryHouse:
+                    return CountryHouseReserveStep;
+                case BuildingType.DetachedHouse:
+                    return DetachedHouseReserveStep;
+                case BuildingType.RiversideHouse:
+                    return RiversideHouseReserveStep;
+                case BuildingType.Villa:
+                    return VillaReserveStep;
+                case BuildingType.StaffDormitory:
+                    return StaffDormitoryReserveStep;
+                case BuildingType.Apartment:
+                    return ApartmentReserveStep;
+                default:
+                    return 0;
+            }
+        }
+
+
+        // 지역 필지 면적 범위 안의 위치로 기본값을 0.75~1.25배 보정
+        private static int ScaleBySize(int baseValue, int area, int minimumArea, int maximumArea)
+        {
+            // 기본값이 없는 건물은 보정 없이 0 유지
+            if (baseValue == 0)
             {
                 return 0;
             }
@@ -548,8 +606,34 @@ namespace RotWorld
             // 지역 최소·최대 면적 사이 위치를 0~1로 제한하고 범위가 없는 고정 규격은 중간값 사용
             float ratio = maximumArea > minimumArea
                 ? Mathf.Clamp01((area - minimumArea) / (float)(maximumArea - minimumArea)) : NeutralSizeRatio;
-            float scale = MinimumStorageScale + StorageScaleRange * ratio;
-            return Math.Max(1, Mathf.RoundToInt(baseCapacity * scale));
+            float scale = MinimumSizeScale + SizeScaleRange * ratio;
+            return Math.Max(1, Mathf.RoundToInt(baseValue * scale));
+        }
+
+
+        // 주거 시설 종류별 기본 정원 조회
+        private static int GetSettlerBase(BuildingType type)
+        {
+            // 주거 시설 일곱 종류 외에는 0
+            switch (type)
+            {
+                case BuildingType.Cabin:
+                    return CabinSettlers;
+                case BuildingType.CountryHouse:
+                    return CountryHouseSettlers;
+                case BuildingType.DetachedHouse:
+                    return DetachedHouseSettlers;
+                case BuildingType.RiversideHouse:
+                    return RiversideHouseSettlers;
+                case BuildingType.Villa:
+                    return VillaSettlers;
+                case BuildingType.StaffDormitory:
+                    return StaffDormitorySettlers;
+                case BuildingType.Apartment:
+                    return ApartmentSettlers;
+                default:
+                    return 0;
+            }
         }
 
 

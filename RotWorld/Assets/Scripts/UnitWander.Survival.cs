@@ -32,7 +32,7 @@ namespace RotWorld
         private const float DoorGuardRadius = 3f;
         private const float DoorCheckDistance = 10f;
         private const float HideSearchRadius = 6f;
-        private const float BuildingViewRadius = 5f;
+        internal const float BuildingViewRadius = 5f;
 
         // 입구를 막은 좀비 한 마리의 유인 단계
         private enum LurePhase

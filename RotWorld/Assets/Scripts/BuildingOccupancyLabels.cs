@@ -139,8 +139,8 @@ namespace RotWorld
         // 건물 상단 중앙을 화면 좌표로 변환해 라벨 배치
         private void RefreshPosition(Label label)
         {
-            // 선택된 건물은 이름 패널에 인원이 표시되므로 겹침 방지를 위해 숨김
-            if (label.Building == infoPanel.SelectedBuilding)
+            // 선택된 건물은 이름 패널에, 거점 건물은 거점 라벨에 인원이 표시되므로 겹침 방지를 위해 숨김
+            if (label.Building == infoPanel.SelectedBuilding || mapView.Map.Bases.TryGet(label.Building, out _))
             {
                 label.Panel.gameObject.SetActive(false);
                 return;
@@ -199,7 +199,9 @@ namespace RotWorld
             }
             else
             {
+                // 복제본을 원본 순서에 끼워 넣어 원본보다 나중에 만든 건물·인간 정보 패널 아래에 표시
                 var panel = UnityEngine.Object.Instantiate(template, template.parent, false);
+                panel.SetSiblingIndex(template.GetSiblingIndex());
                 panel.name = "Building Occupancy";
                 label = new Label { Panel = panel, Text = panel.GetComponentInChildren<TMP_Text>(true) };
             }

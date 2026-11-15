@@ -117,8 +117,9 @@ namespace RotWorld
         // 선택한 건물의 이름과 지붕 위 위치 표시
         private BuildingInfoPanel buildingInfoPanel;
 
-        // 인간이 있는 건물 위 인원 수 표시
+        // 인간이 있는 건물 위 인원 수와 거점 영역 위 정착 인원 표시
         private BuildingOccupancyLabels occupancyLabels;
+        private SettlementBaseLabels baseLabels;
 
         // 생성 설정 입력과 중복 실행 제어
         private TMP_InputField seedInput;
@@ -208,7 +209,12 @@ namespace RotWorld
                 buildingInfoPanel.Refresh(summonSelection == SummonSelection.None);
             }
 
-            // 건물 선택 갱신 후 선택 건물을 제외한 인원 라벨 배치
+            // 건물 선택 갱신 후 선택 건물을 제외한 거점 라벨과 인원 라벨 배치
+            if (baseLabels != null)
+            {
+                baseLabels.Refresh();
+            }
+
             if (occupancyLabels != null)
             {
                 occupancyLabels.Refresh();
@@ -663,10 +669,12 @@ namespace RotWorld
             welcomeRect.anchorMin = welcomeRect.anchorMax = new Vector2(.5f, .5f);
             welcomeRect.pivot = new Vector2(.5f, .5f);
             welcomeLabel.alignment = TextAlignmentOptions.Center;
-            BuildHumanNeedsPanel(canvasRect);
+            // 인원·거점 라벨 원본을 인간 정보와 건물 정보 패널보다 먼저 만들어 라벨이 패널 아래에 그려지게 배치
             var occupancyTemplate = BuildOccupancyLabelTemplate(canvasRect);
+            BuildHumanNeedsPanel(canvasRect);
             BuildBuildingInfoPanel(canvasRect);
             occupancyLabels = new BuildingOccupancyLabels(mapView, worldCamera, canvasRect, occupancyTemplate, buildingInfoPanel);
+            baseLabels = new SettlementBaseLabels(mapView, worldCamera, canvasRect, occupancyTemplate, buildingInfoPanel);
 
             // 생성 설정 입력과 상태 안내 및 실행 버튼 구성
             var dialog = Rect("Map Generation", canvasRect, new Vector2(1, 0), new Vector2(1, 0), new Vector2(-18, 78), new Vector2(466, 526));

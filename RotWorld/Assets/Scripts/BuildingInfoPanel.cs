@@ -19,7 +19,7 @@ namespace RotWorld
         private readonly RectTransform panel;
         private readonly TMP_Text nameLabel;
 
-        // 주거 시설 보관량 또는 빈 재고 안내 줄과 ItemCatalog.All 순서의 읽기 전용 재고 칸
+        // 주거 시설 정착 인원·보관량 또는 빈 재고 안내 줄과 ItemCatalog.All 순서의 읽기 전용 재고 칸
         private readonly TMP_Text storageLabel;
         private readonly RectTransform[] stockSlots;
         private readonly TMP_Text[] stockLabels;
@@ -43,8 +43,9 @@ namespace RotWorld
         private float selectedTop;
         public CityBuilding SelectedBuilding => selectedBuilding;
 
-        // 마지막으로 표시한 내부 인원 수와 재고 버전 및 수색 여부
+        // 마지막으로 표시한 내부 인원 수와 정착 인원 및 재고 버전과 수색 여부
         private int displayedCount = -1;
+        private int displayedSettlerCount = -1;
         private int displayedStockVersion = -1;
         private bool isDisplayedSearched;
 
@@ -146,6 +147,7 @@ namespace RotWorld
                         // 외형 조합 비용을 매 프레임 반복하지 않도록 선택 시 한 번만 상단 계산
                         selectedTop = mapView.GetBuildingVisualTop(selectedBuilding);
                         displayedCount = -1;
+                        displayedSettlerCount = -1;
                         displayedStockVersion = -1;
                         isDisplayedSearched = false;
                     }
@@ -158,14 +160,17 @@ namespace RotWorld
                 return;
             }
 
-            // 선택 변경 또는 인원·재고 변동과 첫 수색 시에만 텍스트와 패널 크기 갱신
+            // 선택 변경 또는 인원·정착 인원·재고 변동과 첫 수색 시에만 텍스트와 패널 크기 갱신
             int count = mapView.Map.Occupancy.GetCount(selectedBuilding);
+            int settlerCount = selectedBuilding.SettlerCount;
             int stockVersion = selectedBuilding.StockVersion;
             bool isSearched = selectedBuilding.IsSearched;
 
-            if (count != displayedCount || stockVersion != displayedStockVersion || isSearched != isDisplayedSearched)
+            if (count != displayedCount || settlerCount != displayedSettlerCount || stockVersion != displayedStockVersion ||
+                isSearched != isDisplayedSearched)
             {
                 displayedCount = count;
+                displayedSettlerCount = settlerCount;
                 displayedStockVersion = stockVersion;
                 isDisplayedSearched = isSearched;
                 RefreshContent();
@@ -192,11 +197,20 @@ namespace RotWorld
             int slotCount = 0;
 
             // 주거 시설은 찾아낸 보관량과 용량, 그 외 건물은 수색 중이거나 빈 재고일 때만 안내 줄 표시
+            bool isResidential = BuildingCatalog.IsResidential(selectedBuilding.Type);
             bool isSearching = showsStock && !selectedBuilding.IsSearchComplete;
-            string storage = !showsStock ? null : BuildingCatalog.IsResidential(selectedBuilding.Type)
+            string storage = !showsStock ? null : isResidential
                 ? (isSearching ? SearchingText + SearchingSeparator : "") + "보관 " + selectedBuilding.RevealedSupplyCount +
                     " / " + selectedBuilding.StorageCapacity
                 : isSearching ? SearchingText : selectedBuilding.TotalStockCount == 0 ? EmptyStockText : null;
+
+            // 주거 시설은 수색 여부와 무관하게 보관량 줄 위에 정착 인원과 정원 줄 추가
+            if (isResidential)
+            {
+                string settlers = "정착 " + displayedSettlerCount + " / " + selectedBuilding.SettlerCapacity;
+                storage = storage == null ? settlers : settlers + "\n" + storage;
+            }
+
             storageLabel.gameObject.SetActive(storage != null);
 
             if (storage != null)
