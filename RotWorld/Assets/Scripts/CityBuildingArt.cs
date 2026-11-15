@@ -9,18 +9,9 @@ namespace RotWorld
     /// </summary>
     internal sealed class CityBuildingArt
     {
-        // 원본 조각과 테두리 및 그림자의 픽셀 규격
+        // 원본 조각 규격과 색조 없는 기본색
         private const int TilePixels = CityArtCatalog.PixelsPerTile;
-        private const int Border = 3;
-        private const int RoofRidgeHeight = 2;
-        private const int SmallWallHeight = 12;
-        private const int DoorWidth = 8;
-        private const int SideDoorWidth = 6;
-        private const int ShadowSoftShade = 232;
-        private const int ShadowMainShade = 182;
         private static readonly Color32 White = new Color32(255, 255, 255, 255);
-        private static readonly Color32 RoofShade = new Color32(205, 214, 219, 255);
-        private static readonly Color32 SideShade = new Color32(163, 179, 187, 255);
         private static readonly RectInt FullTile = new RectInt(0, 0, TilePixels, TilePixels);
 
         // 정면 시점 형태의 층과 마당 및 담장 규격
@@ -42,7 +33,6 @@ namespace RotWorld
         private const int DoorPatchHeight = 14;
         private const int RoofOverhang = 2;
         private const int EaveRows = 3;
-        private const int HipShadeWidth = 3;
         private const int SideFaceWidth = 3;
         private const int MetalRoofSlopeRows = 4;
         private const int SawToothHeight = 14;
@@ -70,6 +60,49 @@ namespace RotWorld
         private const int BodyShadowShade = 178;
         private const int ParkingLineSpacing = 18;
         private const int OfficeWall = FloorHeight * 2 + 2;
+
+        // 고층과 공공 건물의 출입부와 옥상 설비 규격
+        private const int ApartmentStripeWidth = 6;
+        private const int ApartmentNameWidth = 52;
+        private const int LobbyWindowStep = 20;
+        private const int UpperWindowStep = 18;
+        private const int CanopyHalfWidth = 20;
+        private const int PorticoHalfWidth = 18;
+        private const int PorticoColumnStep = 12;
+        private const int RoofCrossSize = 12;
+        private const int NoDoor = -1000;
+        private static readonly Color32[] ApartmentWallTints =
+        {
+            new Color32(246, 246, 240, 255), new Color32(250, 240, 222, 255), new Color32(232, 234, 236, 255)
+        };
+        private static readonly Color32[] OfficeWallTints =
+        {
+            new Color32(150, 156, 166, 255), new Color32(196, 190, 178, 255)
+        };
+        private static readonly Color32[] HotelWallTints =
+        {
+            new Color32(236, 214, 190, 255), new Color32(220, 200, 214, 255), new Color32(226, 214, 198, 255)
+        };
+        private static readonly Color32[] PlainWallTints =
+        {
+            new Color32(248, 248, 246, 255), new Color32(240, 242, 244, 255)
+        };
+        private static readonly Color32[] StoneWallTints =
+        {
+            new Color32(236, 226, 206, 255), new Color32(222, 214, 200, 255)
+        };
+        private static readonly Color32[] RestroomWallTints =
+        {
+            new Color32(214, 230, 236, 255), new Color32(230, 226, 214, 255)
+        };
+        private static readonly Color32[] OutpostWallTints =
+        {
+            new Color32(230, 232, 226, 255), new Color32(206, 214, 196, 255)
+        };
+        private static readonly Color32[] CivicRoofTints =
+        {
+            new Color32(110, 116, 128, 255), new Color32(90, 120, 170, 255)
+        };
         private static readonly Color32 Outline = new Color32(38, 36, 44, 255);
         private static readonly Color32 EaveShadow = new Color32(60, 56, 60, 255);
         private static readonly Color32 RoofRim = new Color32(226, 224, 216, 255);
@@ -211,21 +244,9 @@ namespace RotWorld
             int x = (building.Bounds.x - chunkOrigin.x) * TilePixels;
             int y = (building.Bounds.y - chunkOrigin.y) * TilePixels;
 
-            // 정면 형태는 마당과 본체 그림자, 기존 형태는 필지 전체 그림자 합성
-            if (style.Form != CityArtCatalog.BuildingForm.Legacy)
-            {
-                PaintFrontGround(art, new FrontLayout(building, style), style, pixels, stride,
-                    new Vector2Int(x, y), chunkOrigin * TilePixels, scale);
-            }
-            else
-            {
-                int width = building.Bounds.width * TilePixels;
-                int height = building.Bounds.height * TilePixels;
-                int dx = Border + style.Height / 4;
-                int dy = Border + style.Height / 3;
-                Shade(pixels, stride, new RectInt(x + dx - 1, y - dy - 1, width + 2, height + 2), scale, ShadowSoftShade);
-                Shade(pixels, stride, new RectInt(x + dx, y - dy, width, height), scale, ShadowMainShade);
-            }
+            // 형태별 마당 바닥과 본체 그림자 합성
+            PaintFrontGround(art, new FrontLayout(building, style), style, pixels, stride,
+                new Vector2Int(x, y), chunkOrigin * TilePixels, scale);
 
             int doorX = (building.Door.x - chunkOrigin.x) * TilePixels + TilePixels / 4;
             int doorY = (building.Door.y - chunkOrigin.y) * TilePixels + TilePixels / 4;
@@ -254,130 +275,8 @@ namespace RotWorld
         }
 
 
-        // 벽과 지붕 및 테두리와 종류별 설비의 공통 조합 규칙 실행
-        private void Compose()
-        {
-            // 주택과 상가 및 공장은 벽 3 대 지붕 1 정면 시점 규칙으로 분기
-            if (style.Form != CityArtCatalog.BuildingForm.Legacy)
-            {
-                ComposeFront();
-                return;
-            }
-
-            // 지면에서 위로 올린 지붕과 제한된 높이의 정면 벽 구성
-            int width = building.Bounds.width * TilePixels;
-            int depth = building.Bounds.height * TilePixels;
-            int height = style.Height;
-            RectInt wallSource = height <= SmallWallHeight ? new RectInt(0, 4, TilePixels, 8) : FullTile;
-            Patch(new RectInt(0, 0, width, height), style.Wall, wallSource, White);
-            Patch(new RectInt(width - Border, 0, Border, height), style.Wall, wallSource, SideShade);
-
-            if (style.Category == CityArtCatalog.BuildingCategory.Residential)
-            {
-                Patch(new RectInt(DoorWidth, 0, TilePixels, Mathf.Min(height, DoorWidth)), CityArtCatalog.BuildingPart.Windows,
-                    new RectInt(0, 4, TilePixels, DoorWidth), White);
-            }
-
-            var roof = new RectInt(0, height, width, depth);
-
-            if (style.IsPitched)
-            {
-                int half = depth / 2;
-                Patch(new RectInt(0, height, width, half), style.Roof, FullTile, RoofShade);
-                Patch(new RectInt(0, height + half, width, depth - half), style.Roof, FullTile, style.RoofTint);
-                Patch(new RectInt(Border, height + half - 1, width - Border * 2, RoofRidgeHeight),
-                    CityArtCatalog.BuildingPart.Ridge, new RectInt(0, 7, TilePixels, RoofRidgeHeight), style.RoofTint);
-            }
-            else
-            {
-                Patch(roof, style.Roof, FullTile, style.RoofTint);
-            }
-
-            Frame(roof);
-
-            // 공통 옥상 설비를 크기와 종류에 맞는 고정 위치에 배치
-            Patch(new RectInt(width - TilePixels - Border * 2, height + depth - TilePixels - Border * 2,
-                TilePixels, TilePixels), style.Detail, FullTile, White);
-
-            if (!style.IsPitched)
-            {
-                Patch(new RectInt(TilePixels, height + TilePixels, TilePixels, TilePixels),
-                    CityArtCatalog.BuildingPart.Hatch, FullTile, White);
-
-                if (style.Category == CityArtCatalog.BuildingCategory.HighRise)
-                {
-                    Patch(new RectInt(width / 2, height + depth / 2, TilePixels, TilePixels),
-                        CityArtCatalog.BuildingPart.WaterTank, FullTile, White);
-                }
-            }
-
-            Door(width, depth, height);
-
-            if (style.Sign != CityArtCatalog.BuildingPart.None)
-            {
-                Patch(new RectInt(width / 2 - TilePixels / 2, height + Border, TilePixels, TilePixels), style.Sign, FullTile, White);
-            }
-        }
-
-
-        // 아홉 조각의 지붕 테두리를 늘리지 않고 반복 조합
-        private void Frame(RectInt roof)
-        {
-            // 네 모서리는 원본 크기 유지와 네 가장자리의 중간 부분 반복
-            for (int row = 0; row < 3; row++)
-            {
-                for (int column = 0; column < 3; column++)
-                {
-                    if (row == 1 && column == 1)
-                    {
-                        continue;
-                    }
-
-                    int sourceX = column == 0 ? 0 : column == 1 ? Border : TilePixels - Border;
-                    int sourceY = row == 0 ? 0 : row == 1 ? Border : TilePixels - Border;
-                    int sourceWidth = column == 1 ? TilePixels - Border * 2 : Border;
-                    int sourceHeight = row == 1 ? TilePixels - Border * 2 : Border;
-                    int x = column == 0 ? roof.x : column == 1 ? roof.x + Border : roof.xMax - Border;
-                    int y = row == 0 ? roof.y : row == 1 ? roof.y + Border : roof.yMax - Border;
-                    int width = column == 1 ? roof.width - Border * 2 : Border;
-                    int height = row == 1 ? roof.height - Border * 2 : Border;
-                    Patch(new RectInt(x, y, width, height), CityArtCatalog.BuildingPart.Parapet,
-                        new RectInt(sourceX, sourceY, sourceWidth, sourceHeight), style.RoofTint);
-                }
-            }
-        }
-
-
-        // 실제 Door가 연결된 면에 맞춰 출입문 조각 배치
-        private void Door(int width, int depth, int height)
-        {
-            // 출입구 데이터는 변경하지 않고 입체 외형 위의 투영 위치만 선택
-            int x = (building.Door.x - building.Bounds.x) * TilePixels + TilePixels / 2;
-            int y = (building.Door.y - building.Bounds.y) * TilePixels + TilePixels / 2;
-            int doorWidth = style.Door == CityArtCatalog.BuildingPart.ShutterDoor ? TilePixels : DoorWidth;
-            RectInt target;
-
-            if (building.Door.y < building.Bounds.yMin)
-            {
-                target = new RectInt(Mathf.Clamp(x - doorWidth / 2, Border, width - doorWidth - Border), 0, doorWidth, Mathf.Min(height, TilePixels));
-            }
-            else if (building.Door.y >= building.Bounds.yMax)
-            {
-                target = new RectInt(Mathf.Clamp(x - doorWidth / 2, Border, width - doorWidth - Border),
-                    depth + height - DoorWidth, doorWidth, DoorWidth);
-            }
-            else
-            {
-                int sideX = building.Door.x < building.Bounds.x ? 0 : width - SideDoorWidth;
-                target = new RectInt(sideX, Mathf.Clamp(y - DoorWidth / 2 + height / 2, height, depth), SideDoorWidth, SmallWallHeight);
-            }
-
-            Patch(target, style.Door, new RectInt((TilePixels - doorWidth) / 2, 0, doorWidth, TilePixels), White);
-        }
-
-
         // 형태별 담장과 본체 및 부속 시설 조합 순서 결정
-        private void ComposeFront()
+        private void Compose()
         {
             // 같은 메쉬 안에서 뒤쪽 담장부터 앞쪽 부속 시설 순서로 덮어쓰기
             switch (style.Form)
@@ -390,9 +289,13 @@ namespace RotWorld
                 case CityArtCatalog.BuildingForm.Shop:
                     ComposeShop();
                     break;
-                default:
+                case CityArtCatalog.BuildingForm.Factory:
+                case CityArtCatalog.BuildingForm.Warehouse:
                     DrawFence(IndustrialFence);
                     ComposeIndustrial();
+                    break;
+                default:
+                    ComposeBlock(BlockSpec.For(style.Form));
                     break;
             }
         }
@@ -582,6 +485,232 @@ namespace RotWorld
         }
 
 
+        // 고층과 공공 건물의 1층과 상층 및 상단과 지붕 조합
+        private void ComposeBlock(BlockSpec spec)
+        {
+            // 담장은 본체보다 먼저 그려 본체가 위를 덮도록 배치
+            RectInt body = layout.Body;
+            int x = body.x;
+            int y = body.y;
+            int width = body.width;
+            int wall = layout.Wall;
+            int variation = style.Variation;
+            Color32 wallTint = spec.WallTints[variation % spec.WallTints.Length];
+
+            if ((spec.Props & BlockProps.Fence) != 0)
+            {
+                DrawFence(White);
+            }
+
+            Fill(x - 1, y, width + 2, wall, Outline);
+            Patch(x, y, width, wall, spec.WallPart, FullTile, wallTint);
+            Patch(x + width - SideFaceWidth, y, SideFaceWidth, wall, spec.WallPart, FullTile, Darken(wallTint, 80));
+
+            // 아파트 측면 도색 띠는 상층 발코니보다 먼저 배치
+            int upperY = y + spec.BaseHeight;
+            int upperHeight = layout.Floors * FloorHeight;
+
+            if (style.Form == CityArtCatalog.BuildingForm.Apartment)
+            {
+                Fill(x + 3, upperY, ApartmentStripeWidth, upperHeight, style.Accent);
+            }
+
+            DrawLobby(spec, x, y, width, wallTint);
+
+            if (spec.HasSignRow)
+            {
+                DrawSign(x, y + spec.LobbyHeight, width);
+            }
+
+            DrawUpperFloors(spec.FloorPart, x, upperY, width, wallTint);
+
+            // 상단 난간과 아파트 단지명 및 처마 그림자
+            int topY = y + wall - spec.TopHeight;
+            Fill(x, topY, width, spec.TopHeight, wallTint);
+            Fill(x, topY, width, 1, Darken(wallTint, 70));
+
+            if (style.Form == CityArtCatalog.BuildingForm.Apartment)
+            {
+                int glyphWidth = Mathf.Min(ApartmentNameWidth, (width - 20) / GlyphSpacing * GlyphSpacing - 3);
+                Patch(x + (width - glyphWidth) / 2, topY + 1, glyphWidth, 5, CityArtCatalog.BuildingPart.SignBand,
+                    new RectInt(0, 10, GlyphSpacing, 5), style.Accent);
+            }
+
+            Fill(x, y + wall - 2, width, 2, EaveShadow);
+
+            // 옥상 위 대형 간판은 처마 그림자 뒤에 그려 가려짐 방지
+            if (spec.HasCrownSign)
+            {
+                DrawSign(x, y + wall - SignHeight - 1, width);
+            }
+
+            // 마을회관은 기와 우진각 지붕, 나머지는 방수 평지붕과 옥상 설비
+            if (spec.HasHipRoof)
+            {
+                DrawHipRoof(x, y + wall, width, layout.Roof, CivicRoofTints[variation % CivicRoofTints.Length]);
+            }
+            else
+            {
+                DrawFlatRoof(x, y + wall, width, layout.Roof, FlatRoofTints[(variation >> 2) % FlatRoofTints.Length],
+                    (spec.RoofItems & RoofItems.Tank) != 0, (spec.RoofItems & RoofItems.Units) != 0 ? 2 : 0);
+                DrawRoofItems(spec.RoofItems, x, y + wall, width, layout.Roof);
+            }
+
+        }
+
+
+        // 형태별 1층 출입부 조합
+        private void DrawLobby(BlockSpec spec, int x, int y, int width, Color32 wallTint)
+        {
+            // 출입문은 실제 Door 투영 위치에 맞추고 양옆을 형태별 창이나 진열창으로 구성
+            int doorX = layout.DoorX;
+            int lobby = spec.LobbyHeight;
+
+            switch (spec.Lobby)
+            {
+                case LobbyStyle.Plain:
+                    Fill(x, y, width - SideFaceWidth, lobby, Darken(wallTint, 88));
+                    DrawWindowRow(x, y + 3, width, doorX, LobbyWindowStep);
+                    PatchShopDoor(doorX, y);
+                    break;
+                case LobbyStyle.Glass:
+                case LobbyStyle.Canopy:
+                    Patch(x, y, width - SideFaceWidth, lobby, CityArtCatalog.BuildingPart.StoneWall, FullTile, new Color32(176, 178, 184, 255));
+                    Patch(x + 3, y, width - 7, StorefrontHeight, CityArtCatalog.BuildingPart.Storefront,
+                        new RectInt(0, 0, TilePixels, StorefrontHeight), White);
+                    PatchShopDoor(doorX, y);
+
+                    if (spec.Lobby == LobbyStyle.Canopy)
+                    {
+                        // 병원과 호텔 현관의 업종색 차양과 기둥을 외벽 안쪽으로 제한
+                        int canopyX = Mathf.Clamp(doorX, x + CanopyHalfWidth, x + width - CanopyHalfWidth - SideFaceWidth);
+                        Fill(canopyX - CanopyHalfWidth, y + StorefrontHeight, CanopyHalfWidth * 2, 4, Outline);
+                        Fill(canopyX - CanopyHalfWidth + 1, y + StorefrontHeight + 1, CanopyHalfWidth * 2 - 2, 2, style.Accent);
+                        Fill(canopyX - CanopyHalfWidth + 1, y, 1, StorefrontHeight, Outline);
+                        Fill(canopyX + CanopyHalfWidth - 2, y, 1, StorefrontHeight, Outline);
+                    }
+
+                    break;
+                case LobbyStyle.Portico:
+                    // 관공서 현관의 흰 기둥과 어두운 현관 공간을 외벽 안쪽으로 제한
+                    doorX = Mathf.Clamp(doorX, x + PorticoHalfWidth + 2, x + width - PorticoHalfWidth - 2 - SideFaceWidth);
+                    Fill(doorX - PorticoHalfWidth, y, PorticoHalfWidth * 2, lobby - 3, new Color32(70, 68, 74, 255));
+                    PatchShopDoor(doorX, y);
+
+                    for (int column = -PorticoHalfWidth; column < PorticoHalfWidth; column += PorticoColumnStep)
+                    {
+                        Fill(doorX + column, y, 3, lobby - 3, new Color32(246, 244, 236, 255));
+                        Fill(doorX + column + 2, y, 1, lobby - 3, new Color32(196, 192, 182, 255));
+                    }
+
+                    Fill(doorX - PorticoHalfWidth - 2, y + lobby - 4, PorticoHalfWidth * 2 + 4, 3, new Color32(246, 244, 236, 255));
+                    Fill(doorX - PorticoHalfWidth - 2, y + lobby - 4, PorticoHalfWidth * 2 + 4, 1, Outline);
+                    DrawWindowRow(x, y + 4, width, doorX, LobbyWindowStep, PorticoHalfWidth + 2);
+                    break;
+                case LobbyStyle.TwinDoor:
+                    // 공중화장실 남녀 출입문을 색으로 구분
+                    int center = x + width / 2;
+                    Patch(center - 17, y, TilePixels, DoorPatchHeight, CityArtCatalog.BuildingPart.FrontDoor,
+                        new RectInt(0, 0, TilePixels, DoorPatchHeight), new Color32(150, 190, 255, 255));
+                    Patch(center + 1, y, TilePixels, DoorPatchHeight, CityArtCatalog.BuildingPart.FrontDoor,
+                        new RectInt(0, 0, TilePixels, DoorPatchHeight), new Color32(255, 160, 168, 255));
+                    break;
+                case LobbyStyle.Booth:
+                    // 초소의 넓은 감시 창과 철문
+                    Patch(x + 3, y + 6, width - 8, BandWindowHeight, CityArtCatalog.BuildingPart.ShutterBand,
+                        new RectInt(0, 10, TilePixels, BandWindowHeight), White);
+                    Patch(doorX - TilePixels / 2, y, TilePixels, DoorPatchHeight, CityArtCatalog.BuildingPart.FrontDoor,
+                        new RectInt(0, 0, TilePixels, DoorPatchHeight), new Color32(170, 186, 196, 255));
+                    break;
+            }
+        }
+
+
+        // 형태별 상층 창과 발코니 및 유리 외벽 반복
+        private void DrawUpperFloors(CityArtCatalog.BuildingPart part, int x, int y, int width, Color32 wallTint)
+        {
+            // 유리 외벽은 층 구분 없이 한 면으로 덮고 나머지는 층마다 반복
+            int floors = layout.Floors;
+
+            if (floors <= 0)
+            {
+                return;
+            }
+
+            if (part == CityArtCatalog.BuildingPart.CurtainWall)
+            {
+                Patch(x + 3, y, width - 8, floors * FloorHeight, part, FullTile, White);
+                return;
+            }
+
+            for (int floor = 0; floor < floors; floor++)
+            {
+                int floorY = y + floor * FloorHeight;
+                Fill(x, floorY, width - SideFaceWidth, 1, Darken(wallTint, 76));
+
+                if (part == CityArtCatalog.BuildingPart.Balcony)
+                {
+                    int balconyX = x + ApartmentStripeWidth + 6;
+                    Patch(balconyX, floorY, (x + width - 6 - balconyX) / TilePixels * TilePixels, FloorHeight, part, FullTile, White);
+                }
+                else if (part == CityArtCatalog.BuildingPart.ShutterBand)
+                {
+                    Patch(x + 4, floorY + 5, width - 12, BandWindowHeight, part, new RectInt(0, 10, TilePixels, BandWindowHeight), White);
+                }
+                else
+                {
+                    DrawWindowRow(x, floorY + 3, width, NoDoor, UpperWindowStep);
+                }
+            }
+        }
+
+
+        // 출입문 주변을 비운 알루미늄 창 한 줄 배치
+        private void DrawWindowRow(int x, int y, int width, int doorX, int step, int doorClearance = 14)
+        {
+            // 출입문과 겹치는 창 자리는 건너뛰어 문 주변 벽 유지
+            for (int windowX = x + 4; windowX + 14 <= x + width - 6; windowX += step)
+            {
+                if (Mathf.Abs(windowX + 7 - doorX) < doorClearance)
+                {
+                    continue;
+                }
+
+                Patch(windowX, y, 14, 10, CityArtCatalog.BuildingPart.UpperWindow, new RectInt(1, 0, 14, 10), White);
+            }
+        }
+
+
+        // 유리 출입문 조각 배치
+        private void PatchShopDoor(int doorX, int y)
+        {
+            // 출입문 원본 폭을 유지한 중앙 정렬
+            Patch(doorX - TilePixels / 2, y, TilePixels, DoorPatchHeight, CityArtCatalog.BuildingPart.ShopDoor,
+                new RectInt(0, 0, TilePixels, DoorPatchHeight), White);
+        }
+
+
+        // 병원 옥상 십자 표지와 아파트 승강기 탑 배치
+        private void DrawRoofItems(RoofItems items, int x, int y, int width, int rows)
+        {
+            // 옥상 깊이가 충분한 경우만 표지 배치
+            if ((items & RoofItems.Cross) != 0 && rows >= RoofCrossSize + 2)
+            {
+                Patch(x + width / 2 - RoofCrossSize / 2, y + (rows - RoofCrossSize) / 2, RoofCrossSize, RoofCrossSize,
+                    CityArtCatalog.BuildingPart.RoofCross, new RectInt(2, 2, RoofCrossSize, RoofCrossSize), White);
+            }
+
+            if ((items & RoofItems.Elevator) != 0 && rows >= 14 && width >= 64)
+            {
+                int boxX = x + width / 3;
+                Fill(boxX - 1, y + 3, 18, 12, Outline);
+                Patch(boxX, y + 3, 16, 11, CityArtCatalog.BuildingPart.PlasterWall, FullTile, new Color32(224, 224, 218, 255));
+                Fill(boxX, y + 3, 16, 2, new Color32(170, 170, 164, 255));
+                Fill(boxX + 5, y + 5, 6, 6, new Color32(84, 120, 146, 255));
+            }
+        }
+
+
         // 금속 외벽과 셔터 및 띠창과 지붕의 공장동 조합
         private void DrawShed(int x, int y, int width, int wall, int roof, int variation, bool isFactory, int doorX,
             CityArtCatalog.BuildingPart sign, RectInt office)
@@ -726,9 +855,7 @@ namespace RotWorld
         // 처마와 기와 및 양끝 경사를 행 단위로 조합한 우진각 지붕
         private void DrawHipRoof(int x, int y, int width, int rows, Color32 tint)
         {
-            // 처마 아래 행부터 위로 갈수록 양끝을 한 픽셀씩 줄여 경사 표현
-            Color32 dark = Darken(tint, 74);
-
+            // 처마 아래 행부터 위로 갈수록 양끝을 한 픽셀씩 줄여 경사 표현하고 양끝 어두운 면은 두지 않음
             for (int row = 0; row < rows; row++)
             {
                 int inset = Mathf.Max(0, row - EaveRows);
@@ -748,8 +875,6 @@ namespace RotWorld
                 else
                 {
                     Patch(left, y + row, right - left, 1, CityArtCatalog.BuildingPart.RoofTiles, tileRow, tint);
-                    Patch(left, y + row, HipShadeWidth, 1, CityArtCatalog.BuildingPart.RoofTiles, tileRow, dark);
-                    Patch(right - HipShadeWidth, y + row, HipShadeWidth, 1, CityArtCatalog.BuildingPart.RoofTiles, tileRow, dark);
                 }
 
                 Fill(left - 1, y + row, 1, 1, Outline);
@@ -909,45 +1034,74 @@ namespace RotWorld
 
                     break;
                 case CityArtCatalog.BuildingForm.Shop:
-                    // 앞 주차장과 출입문 앞을 비운 주차선만 표시하고 지붕 뒤 필지는 기존 지형 유지
-                    PaintSurface(art, pixels, stride, yard, scale, worldOffset, CityArtCatalog.BuildingPart.Asphalt, White);
-
-                    for (int lineX = layout.Body.x + 2; lineX < layout.Body.xMax; lineX += ParkingLineSpacing)
-                    {
-                        if (Mathf.Abs(lineX - layout.DoorX) > 12)
-                        {
-                            PaintColor(pixels, stride, new RectInt(origin.x + lineX, yard.y + 3, 1, Mathf.Max(0, yard.height - 6)),
-                                scale, ParkingLine);
-                        }
-                    }
-
+                    // 앞 주차장만 표시하고 지붕 뒤 필지는 기존 지형 유지
+                    PaintParking(art, layout, pixels, stride, yard, origin, worldOffset, scale);
                     break;
-                default:
+                case CityArtCatalog.BuildingForm.Factory:
+                case CityArtCatalog.BuildingForm.Warehouse:
                     PaintSurface(art, pixels, stride, new RectInt(origin.x, origin.y, layout.LotWidth, layout.LotDepth), scale,
                         worldOffset, CityArtCatalog.BuildingPart.YardPaving, IndustrialConcrete);
                     break;
+                default:
+                    // 블록형 건물은 주차장 또는 시멘트 앞마당, 북쪽 출입의 뒷마당은 진입로만 포장
+                    if ((BlockSpec.For(style.Form).Props & BlockProps.Parking) != 0)
+                    {
+                        PaintParking(art, layout, pixels, stride, yard, origin, worldOffset, scale);
+                    }
+                    else if (layout.Side == DoorSide.North)
+                    {
+                        foreach (RectInt path in layout.GetPath())
+                        {
+                            PaintSurface(art, pixels, stride, Offset(path, origin), scale, worldOffset,
+                                CityArtCatalog.BuildingPart.YardPaving, YardCement);
+                        }
+                    }
+                    else
+                    {
+                        PaintSurface(art, pixels, stride, yard, scale, worldOffset, CityArtCatalog.BuildingPart.YardPaving, YardCement);
+                    }
+
+                    break;
             }
 
-            // 본체와 부속 건물의 우하단 그림자
-            Shade(pixels, stride, Offset(Shadow(layout.Body), origin), scale, BodyShadowShade);
+            // 본체와 부속 건물 벽면의 우하단 그림자만 표시해 지붕 옆 어두운 면 방지
+            Shade(pixels, stride, Offset(Shadow(layout.Body, layout.Wall), origin), scale, BodyShadowShade);
 
             if (layout.Office.width > 0)
             {
-                Shade(pixels, stride, Offset(Shadow(layout.Office), origin), scale, BodyShadowShade);
+                Shade(pixels, stride, Offset(Shadow(layout.Office, OfficeWall), origin), scale, BodyShadowShade);
             }
 
             if (layout.Shed.width > 0)
             {
-                Shade(pixels, stride, Offset(Shadow(layout.Shed), origin), scale, BodyShadowShade);
+                Shade(pixels, stride, Offset(Shadow(layout.Shed, ShedWallHeight), origin), scale, BodyShadowShade);
             }
         }
 
 
-        // 본체 영역을 우하단으로 옮긴 그림자 영역 계산
-        private static RectInt Shadow(RectInt area)
+        // 아스팔트 앞마당과 출입문 앞을 비운 주차선 합성
+        private static void PaintParking(CityArtCatalog art, FrontLayout layout, NativeArray<Color32> pixels, int stride,
+            RectInt yard, Vector2Int origin, Vector2Int worldOffset, float scale)
         {
-            // 좌상단 광원 기준의 고정 오프셋 적용
-            return new RectInt(area.x + BodyShadowOffset, area.y - BodyShadowOffset, area.width, area.height);
+            // 주차 차량 배치와 같은 간격의 세로 주차선
+            PaintSurface(art, pixels, stride, yard, scale, worldOffset, CityArtCatalog.BuildingPart.Asphalt, White);
+
+            for (int lineX = layout.Body.x + 2; lineX < layout.Body.xMax; lineX += ParkingLineSpacing)
+            {
+                if (Mathf.Abs(lineX - layout.DoorX) > 12)
+                {
+                    PaintColor(pixels, stride, new RectInt(origin.x + lineX, yard.y + 3, 1, Mathf.Max(0, yard.height - 6)),
+                        scale, ParkingLine);
+                }
+            }
+        }
+
+
+        // 벽면 높이만큼의 본체 영역을 우하단으로 옮긴 그림자 영역 계산
+        private static RectInt Shadow(RectInt area, int wallHeight)
+        {
+            // 좌상단 광원 기준의 고정 오프셋 적용과 지붕 높이 제외
+            return new RectInt(area.x + BodyShadowOffset, area.y - BodyShadowOffset, area.width, wallHeight);
         }
 
 
@@ -1130,6 +1284,141 @@ namespace RotWorld
 
 
         /// <summary>
+        /// 블록형 건물의 1층 출입부 형식
+        /// </summary>
+        private enum LobbyStyle
+        {
+            Plain, Glass, Canopy, Portico, TwinDoor, Booth
+        }
+
+        /// <summary>
+        /// 블록형 건물 옥상 설비 선택
+        /// </summary>
+        [System.Flags]
+        private enum RoofItems
+        {
+            None = 0, Tank = 1, Units = 2, Cross = 4, Elevator = 8
+        }
+
+        /// <summary>
+        /// 블록형 건물 앞마당 바닥과 담장 선택
+        /// </summary>
+        [System.Flags]
+        private enum BlockProps
+        {
+            None = 0, Fence = 1, Parking = 2
+        }
+
+        /// <summary>
+        /// 고층과 공공 건물 형태별 외벽과 층 구성 및 마당 규격
+        /// </summary>
+        private readonly struct BlockSpec
+        {
+            // 필지 여백과 앞마당 깊이
+            internal readonly int Inset;
+            internal readonly int FrontYard;
+
+            // 외벽 재질과 변형 색상
+            internal readonly CityArtCatalog.BuildingPart WallPart;
+            internal readonly Color32[] WallTints;
+
+            // 1층 출입부와 간판 줄 및 상층 반복 조각
+            internal readonly LobbyStyle Lobby;
+            internal readonly int LobbyHeight;
+            internal readonly bool HasSignRow;
+            internal readonly CityArtCatalog.BuildingPart FloorPart;
+            internal readonly int MaximumFloors;
+            internal readonly int MinimumFloors;
+
+            // 상단 난간과 옥상 간판 및 지붕 구성
+            internal readonly int Parapet;
+            internal readonly bool HasCrownSign;
+            internal readonly bool HasHipRoof;
+            internal readonly RoofItems RoofItems;
+
+            // 앞마당 바닥과 담장
+            internal readonly BlockProps Props;
+
+            internal int BaseHeight => LobbyHeight + (HasSignRow ? SignHeight + 1 : 0);
+            internal int TopHeight => Parapet + (HasCrownSign ? SignHeight + 2 : 0);
+
+
+            // 형태별 규격 값 보관
+            private BlockSpec(int inset, int frontYard, CityArtCatalog.BuildingPart wallPart, Color32[] wallTints,
+                LobbyStyle lobby, int lobbyHeight, bool hasSignRow, CityArtCatalog.BuildingPart floorPart,
+                int maximumFloors, int minimumFloors, int parapet, bool hasCrownSign, bool hasHipRoof,
+                RoofItems roofItems, BlockProps props)
+            {
+                // 형태 선택 결과를 읽기 전용으로 전달
+                Inset = inset;
+                FrontYard = frontYard;
+                WallPart = wallPart;
+                WallTints = wallTints;
+                Lobby = lobby;
+                LobbyHeight = lobbyHeight;
+                HasSignRow = hasSignRow;
+                FloorPart = floorPart;
+                MaximumFloors = maximumFloors;
+                MinimumFloors = minimumFloors;
+                Parapet = parapet;
+                HasCrownSign = hasCrownSign;
+                HasHipRoof = hasHipRoof;
+                RoofItems = roofItems;
+                Props = props;
+            }
+
+
+            // 건물 형태에 맞는 블록 규격 조회
+            internal static BlockSpec For(CityArtCatalog.BuildingForm form)
+            {
+                // 형태별로 한눈에 구분되는 외벽과 1층 및 마당 조합 선택
+                switch (form)
+                {
+                    case CityArtCatalog.BuildingForm.Apartment:
+                        return new BlockSpec(4, 30, CityArtCatalog.BuildingPart.PlasterWall, ApartmentWallTints,
+                            LobbyStyle.Plain, 16, false, CityArtCatalog.BuildingPart.Balcony, 6, 2, 7, false, false,
+                            RoofItems.Tank | RoofItems.Elevator, BlockProps.Fence);
+                    case CityArtCatalog.BuildingForm.Office:
+                        return new BlockSpec(4, 26, CityArtCatalog.BuildingPart.StoneWall, OfficeWallTints,
+                            LobbyStyle.Glass, 18, false, CityArtCatalog.BuildingPart.CurtainWall, 6, 1, 4, false, false,
+                            RoofItems.Units, BlockProps.None);
+                    case CityArtCatalog.BuildingForm.Hotel:
+                        return new BlockSpec(4, 26, CityArtCatalog.BuildingPart.PlasterWall, HotelWallTints,
+                            LobbyStyle.Canopy, 20, false, CityArtCatalog.BuildingPart.UpperWindow, 5, 1, 2, true, false,
+                            RoofItems.Units, BlockProps.Parking);
+                    case CityArtCatalog.BuildingForm.Mart:
+                        return new BlockSpec(3, 40, CityArtCatalog.BuildingPart.PlasterWall, PlainWallTints,
+                            LobbyStyle.Glass, 18, true, CityArtCatalog.BuildingPart.ShutterBand, 1, 0, 3, false, false,
+                            RoofItems.Units, BlockProps.Parking);
+                    case CityArtCatalog.BuildingForm.DepartmentStore:
+                        return new BlockSpec(3, 30, CityArtCatalog.BuildingPart.StoneWall, StoneWallTints,
+                            LobbyStyle.Glass, 22, false, CityArtCatalog.BuildingPart.CurtainWall, 4, 1, 2, true, false,
+                            RoofItems.Units, BlockProps.None);
+                    case CityArtCatalog.BuildingForm.Hospital:
+                        return new BlockSpec(4, 30, CityArtCatalog.BuildingPart.PlasterWall, PlainWallTints,
+                            LobbyStyle.Canopy, 20, true, CityArtCatalog.BuildingPart.UpperWindow, 4, 1, 4, false, false,
+                            RoofItems.Tank | RoofItems.Cross, BlockProps.Parking);
+                    case CityArtCatalog.BuildingForm.Police:
+                        return new BlockSpec(5, 28, CityArtCatalog.BuildingPart.PlasterWall, PlainWallTints,
+                            LobbyStyle.Glass, 18, true, CityArtCatalog.BuildingPart.UpperWindow, 2, 1, 4, false, false,
+                            RoofItems.Units, BlockProps.Parking | BlockProps.Fence);
+                    case CityArtCatalog.BuildingForm.Civic:
+                        return new BlockSpec(5, 30, CityArtCatalog.BuildingPart.StoneWall, StoneWallTints,
+                            LobbyStyle.Portico, 20, true, CityArtCatalog.BuildingPart.UpperWindow, 1, 0, 4, false, true,
+                            RoofItems.None, BlockProps.None);
+                    case CityArtCatalog.BuildingForm.Restroom:
+                        return new BlockSpec(8, 18, CityArtCatalog.BuildingPart.PlasterWall, RestroomWallTints,
+                            LobbyStyle.TwinDoor, 18, true, CityArtCatalog.BuildingPart.None, 0, 0, 3, false, false,
+                            RoofItems.None, BlockProps.None);
+                    default:
+                        return new BlockSpec(8, 22, CityArtCatalog.BuildingPart.PlasterWall, OutpostWallTints,
+                            LobbyStyle.Booth, 18, true, CityArtCatalog.BuildingPart.None, 0, 0, 3, false, false,
+                            RoofItems.None, BlockProps.None);
+                }
+            }
+        }
+
+        /// <summary>
         /// 출입문이 놓인 필지 바깥 방향
         /// </summary>
         private enum DoorSide
@@ -1172,14 +1461,8 @@ namespace RotWorld
             // 형태별 층수와 필지 깊이에서 본체와 마당 배치 계산
             internal FrontLayout(CityBuilding building, CityArtCatalog.BuildingStyle style)
             {
-                // 기존 형태는 계산 없이 빈 배치 유지
+                // 공장 부속 시설은 해당 형태에서만 채우고 나머지는 빈 영역 유지
                 this = default;
-
-                if (style.Form == CityArtCatalog.BuildingForm.Legacy)
-                {
-                    return;
-                }
-
                 RectInt bounds = building.Bounds;
                 LotWidth = bounds.width * TilePixels;
                 LotDepth = bounds.height * TilePixels;
@@ -1218,7 +1501,8 @@ namespace RotWorld
                         minimumFloors = 0;
                         frontYard = 22;
                         break;
-                    default:
+                    case CityArtCatalog.BuildingForm.Factory:
+                    case CityArtCatalog.BuildingForm.Warehouse:
                         // 공장 벽은 필지 깊이에 비례하되 최소 마당과 셔터 높이 범위로 제한
                         inset = 8;
                         baseHeight = Mathf.Clamp((LotDepth * IndustrialWallPercent / 100 + 8) / 16 * 16,
@@ -1227,6 +1511,16 @@ namespace RotWorld
                         floors = 0;
                         minimumFloors = 0;
                         frontYard = LotDepth;
+                        break;
+                    default:
+                        // 고층과 공공 건물은 형태별 블록 규격의 1층과 상층 및 상단 높이 사용
+                        BlockSpec spec = BlockSpec.For(style.Form);
+                        inset = spec.Inset;
+                        baseHeight = spec.BaseHeight;
+                        topHeight = spec.TopHeight;
+                        floors = spec.MaximumFloors;
+                        minimumFloors = spec.MinimumFloors;
+                        frontYard = spec.FrontYard;
                         break;
                 }
 

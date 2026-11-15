@@ -60,47 +60,41 @@ namespace RotWorld
         private static readonly Color32 CurbShadow = new Color32(133, 135, 127, 255);
 
         // 공용 건물 조각과 머티리얼 및 지면 깊이 정렬 규격
-        private const int BuildingAtlasRows = 16;
+        private const int BuildingAtlasRows = 19;
         private const int MaximumMapSize = 1024;
         private const int DepthStepsPerTile = 4;
         private const int DepthStride = 4;
         private const int FirstBuildingOrder = 8;
-        public const int MaximumBuildingHeight = 24;
         public const int FactoryStackRise = 18;
         private static readonly Color32 White = new Color32(255, 255, 255, 255);
+        private static readonly Color32[] ApartmentAccents =
+        {
+            new Color32(80, 130, 190, 255), new Color32(90, 160, 110, 255), new Color32(220, 140, 70, 255)
+        };
         [SerializeField] private Texture2D buildingAtlas;
         [SerializeField] private Material buildingMaterial;
         private Color32[] buildingPixels;
         internal Material BuildingMaterial => buildingMaterial;
 
         /// <summary>
-        /// 실제 건물 종류에 대응하는 표시용 외형 분류
-        /// </summary>
-        public enum BuildingCategory
-        {
-            Residential, Commercial, HighRise, Industrial, Public
-        }
-
-        /// <summary>
         /// 공용 건물 시트의 16픽셀 조각 식별자
         /// </summary>
         public enum BuildingPart
         {
-            None = -1, TerracottaRoof, SlateRoof, ConcreteRoof, MetalRoof, Ridge,
-            ResidentialWall, ShopWall, HighRiseWall, IndustrialWall, Parapet,
-            AirConditioner, Skylight, HouseDoor, GlassDoor, ShutterDoor, Windows,
-            RedSign, PharmacySign, BlueSign, CafeSign, HospitalSign, PoliceSign,
-            HealthSign, CivicSign, RestroomSign, GuardSign, HotelSign, OfficeWall,
-            WaterTank, Chimney, SolarPanels, Hatch,
-            // 벽 3 대 지붕 1 정면 시점의 주택과 상가 및 공장 조각
-            Solid, PlasterWall, BrickWall, HouseWindows,
+            // 시트 0~31번 칸은 이전 조각 보존 영역이므로 32번부터 사용
+            None = -1,
+            Solid = 32, PlasterWall, BrickWall, HouseWindows,
             FishIcon, FrontDoor, RoofTiles, RoofEdge,
             BlockFence, Gate, YardPaving, Asphalt,
             Storefront, ShopDoor, Awning, SignBand,
             UpperWindow, FlatRoof, RoofTank, RoofUnit,
             MetalWall, ShutterBand, OfficeIcon, SawRoof,
             Smokestack, Container, ConvenienceIcon, MartIcon,
-            PharmacyIcon, FoodIcon, CafeIcon, ToolIcon
+            PharmacyIcon, FoodIcon, CafeIcon, ToolIcon,
+            // 고층과 공공 건물 간판과 외벽 및 옥상 조각
+            HospitalIcon, PoliceIcon, CivicIcon, RestroomIcon,
+            GuardIcon, HotelIcon, BagIcon, CurtainWall,
+            Balcony, RoofCross, StoneWall
         }
 
         /// <summary>
@@ -108,55 +102,36 @@ namespace RotWorld
         /// </summary>
         public enum BuildingForm
         {
-            Legacy, House, Villa, Shop, Factory, Warehouse
+            House, Villa, Shop, Factory, Warehouse,
+            Apartment, Office, Hotel, Mart, DepartmentStore,
+            Hospital, Police, Civic, Restroom, Outpost
         }
 
         /// <summary>
-        /// 지도 생성 데이터와 분리한 건물 조각 및 높이와 색상 선택 결과
+        /// 지도 생성 데이터와 분리한 건물 형태와 높이 및 색상 선택 결과
         /// </summary>
         public readonly struct BuildingStyle
         {
-            // 조합할 원본 조각과 외형 높이 및 변형 식별
-            public BuildingCategory Category { get; }
-            public BuildingPart Roof { get; }
-            public BuildingPart Wall { get; }
-            public BuildingPart Door { get; }
-            public BuildingPart Sign { get; }
-            public BuildingPart Detail { get; }
-            public int Height { get; }
-            public int Variant { get; }
-            public bool IsPitched { get; }
-            public Color32 RoofTint { get; }
-
-            // 정면 시점 형태와 색상 변형 및 간판 표시 선택
+            // 정면 시점 형태와 필지 위로 올라가는 표시 높이
             public BuildingForm Form { get; }
+            public int Height { get; }
+
+            // 색상 변형과 업종 간판 및 차양 선택
             public int Variation { get; }
+            public BuildingPart Sign { get; }
             public Color32 Accent { get; }
             public bool HasAwning { get; }
 
-            // 건물의 읽기 전용 조각 선택값 보관
-            internal BuildingStyle(BuildingCategory category, BuildingPart roof, BuildingPart wall, BuildingPart door,
-                BuildingPart sign, BuildingPart detail,
-                int height, int variant, bool isPitched,
-                BuildingForm form, int variation, Color32 accent, bool hasAwning)
+            // 건물의 읽기 전용 외형 선택값 보관
+            internal BuildingStyle(BuildingForm form, int height, int variation, BuildingPart sign, Color32 accent, bool hasAwning)
             {
                 // 도시 생성 난수와 독립적으로 결정된 표시 설정 전달
                 Form = form;
+                Height = height;
                 Variation = variation;
+                Sign = sign;
                 Accent = accent;
                 HasAwning = hasAwning;
-                Category = category;
-                Roof = roof;
-                Wall = wall;
-                Door = door;
-                Sign = sign;
-                Detail = detail;
-                Height = height;
-                Variant = variant;
-                IsPitched = isPitched;
-                RoofTint = variant == 0 ? new Color32(255, 255, 255, 255)
-                    : isPitched ? new Color32(215, 231, 239, 255)
-                    : category == BuildingCategory.Industrial ? new Color32(180, 206, 224, 255) : new Color32(190, 212, 230, 255);
             }
         }
 
@@ -226,7 +201,7 @@ namespace RotWorld
                 buildingAtlas.filterMode != FilterMode.Point || buildingMaterial == null ||
                 buildingMaterial.shader == null || buildingMaterial.mainTexture != buildingAtlas)
             {
-                throw new InvalidOperationException("건물 아틀라스 64×256 Point 설정과 공용 머티리얼 연결이 필요합니다");
+                throw new InvalidOperationException("건물 아틀라스 64×304 Point 설정과 공용 머티리얼 연결이 필요합니다");
             }
 
             buildingPixels = buildingAtlas.GetPixels32();
@@ -619,7 +594,7 @@ namespace RotWorld
         }
 
 
-        // 시드와 실제 종류 및 위치에서 건물 조합과 색상 변형 선택
+        // 시드와 실제 종류 및 위치에서 건물 형태와 색상 변형 선택
         public BuildingStyle GetBuildingStyle(int seed, CityBuilding building)
         {
             // 다른 도시 난수 흐름을 소비하지 않는 좌표와 종류 해시 구성
@@ -627,95 +602,40 @@ namespace RotWorld
                 (uint)building.Bounds.y * VerticalHashMultiplier ^ (uint)building.Type * HashAvalancheMultiplier);
             hash ^= hash >> 16;
             hash = unchecked(hash * HashAvalancheMultiplier);
-            int variant = (int)((hash >> 15) & 1u);
-            BuildingType type = building.Type;
-            BuildingCategory category = type switch
-            {
-                BuildingType.DetachedHouse or BuildingType.Villa or BuildingType.CountryHouse or
-                    BuildingType.RiversideHouse or BuildingType.Cabin or BuildingType.CampsiteOffice or
-                    BuildingType.StaffDormitory => BuildingCategory.Residential,
-                BuildingType.Apartment or BuildingType.OfficeBuilding or BuildingType.Hotel or
-                    BuildingType.Hypermarket or BuildingType.DepartmentStore => BuildingCategory.HighRise,
-                BuildingType.FarmToolStorage or BuildingType.SmallWarehouse or BuildingType.Factory or
-                    BuildingType.LogisticsWarehouse or BuildingType.RepairShop => BuildingCategory.Industrial,
-                BuildingType.Hospital or BuildingType.PoliceStation or BuildingType.HealthCenter or
-                    BuildingType.VillageHall or BuildingType.PublicRestroom or BuildingType.Guardhouse or
-                    BuildingType.CoastalOutpost => BuildingCategory.Public,
-                BuildingType.Unspecified => building.Kind == 3 ? BuildingCategory.HighRise
-                    : building.Kind == 2 ? BuildingCategory.Industrial : BuildingCategory.Residential,
-                _ => BuildingCategory.Commercial
-            };
-            bool isPitched = category == BuildingCategory.Residential && type != BuildingType.Villa && type != BuildingType.StaffDormitory;
-            BuildingPart roof = isPitched ? (variant == 0 ? BuildingPart.TerracottaRoof : BuildingPart.SlateRoof)
-                : category == BuildingCategory.Industrial ? BuildingPart.MetalRoof : BuildingPart.ConcreteRoof;
-            BuildingPart wall = category == BuildingCategory.Industrial ? BuildingPart.IndustrialWall
-                : category == BuildingCategory.HighRise ? BuildingPart.HighRiseWall
-                : category == BuildingCategory.Commercial ? BuildingPart.ShopWall : BuildingPart.ResidentialWall;
-            BuildingPart door = category == BuildingCategory.Industrial ? BuildingPart.ShutterDoor
-                : isPitched ? BuildingPart.HouseDoor : BuildingPart.GlassDoor;
-            BuildingPart detail = isPitched ? (variant == 0 ? BuildingPart.Chimney : BuildingPart.SolarPanels)
-                : category == BuildingCategory.Industrial ? BuildingPart.AirConditioner : BuildingPart.Skylight;
-            BuildingPart sign = type switch
-            {
-                BuildingType.Pharmacy => BuildingPart.PharmacySign,
-                BuildingType.Hospital => BuildingPart.HospitalSign,
-                BuildingType.PoliceStation => BuildingPart.PoliceSign,
-                BuildingType.HealthCenter => BuildingPart.HealthSign,
-                BuildingType.VillageHall or BuildingType.CampsiteOffice => BuildingPart.CivicSign,
-                BuildingType.PublicRestroom => BuildingPart.RestroomSign,
-                BuildingType.Guardhouse or BuildingType.CoastalOutpost => BuildingPart.GuardSign,
-                BuildingType.Hotel => BuildingPart.HotelSign,
-                BuildingType.ConvenienceStore or BuildingType.Restaurant or BuildingType.RiversideRestaurant => BuildingPart.RedSign,
-                BuildingType.NeighborhoodMarket or BuildingType.HardwareStore or BuildingType.Cafe or
-                    BuildingType.RepairShop or BuildingType.ToolStore => BuildingPart.CafeSign,
-                BuildingType.SmallSupermarket or BuildingType.Hypermarket or BuildingType.DepartmentStore or
-                    BuildingType.FishingSupplyStore or BuildingType.WaterfrontOffice => BuildingPart.BlueSign,
-                _ => BuildingPart.None
-            };
-            int height = category == BuildingCategory.HighRise ? MaximumBuildingHeight
-                : category == BuildingCategory.Commercial || category == BuildingCategory.Public ? 12 : 8;
-
-            if (type == BuildingType.OfficeBuilding || type == BuildingType.WaterfrontOffice)
-            {
-                wall = BuildingPart.OfficeWall;
-            }
-
-            if (type == BuildingType.Hospital)
-            {
-                height = 20;
-                wall = BuildingPart.HighRiseWall;
-            }
-
-            if (type == BuildingType.Villa || type == BuildingType.StaffDormitory)
-            {
-                height = 12;
-                wall = BuildingPart.HighRiseWall;
-            }
-
-            // 주택과 상가 및 공장은 정면 시점 형태로 조합하고 나머지는 기존 조각 조합 유지
             int variation = (int)(hash >> 16);
-            BuildingForm form = category switch
+            BuildingType type = building.Type;
+
+            // 실제 건물 종류를 정면 시점 형태로 대응하고 종류 미지정 건물은 생성 분류 사용
+            BuildingForm form = type switch
             {
-                BuildingCategory.Residential => isPitched ? BuildingForm.House : BuildingForm.Villa,
-                BuildingCategory.Commercial => BuildingForm.Shop,
-                BuildingCategory.Industrial => type == BuildingType.Factory ||
-                    type == BuildingType.Unspecified ? BuildingForm.Factory : BuildingForm.Warehouse,
-                _ => BuildingForm.Legacy
+                BuildingType.DetachedHouse or BuildingType.CountryHouse or BuildingType.RiversideHouse or
+                    BuildingType.Cabin => BuildingForm.House,
+                BuildingType.Villa or BuildingType.StaffDormitory => BuildingForm.Villa,
+                BuildingType.Apartment => BuildingForm.Apartment,
+                BuildingType.OfficeBuilding => BuildingForm.Office,
+                BuildingType.Hotel => BuildingForm.Hotel,
+                BuildingType.Hypermarket => BuildingForm.Mart,
+                BuildingType.DepartmentStore => BuildingForm.DepartmentStore,
+                BuildingType.Hospital => BuildingForm.Hospital,
+                BuildingType.PoliceStation => BuildingForm.Police,
+                BuildingType.VillageHall or BuildingType.HealthCenter or BuildingType.CampsiteOffice => BuildingForm.Civic,
+                BuildingType.PublicRestroom => BuildingForm.Restroom,
+                BuildingType.Guardhouse or BuildingType.CoastalOutpost => BuildingForm.Outpost,
+                BuildingType.Factory => BuildingForm.Factory,
+                BuildingType.FarmToolStorage or BuildingType.SmallWarehouse or BuildingType.LogisticsWarehouse or
+                    BuildingType.RepairShop => BuildingForm.Warehouse,
+                BuildingType.Unspecified => building.Kind == 3 ? BuildingForm.Office
+                    : building.Kind == 2 ? BuildingForm.Factory : BuildingForm.House,
+                _ => BuildingForm.Shop
             };
 
-            if (form == BuildingForm.Legacy)
-            {
-                return new BuildingStyle(category, roof, wall, door, sign, detail, height, variant, isPitched,
-                    form, variation, White, false);
-            }
-
-            // 업종을 한눈에 구분하는 간판 아이콘과 대표색 선택
-            Color32 accent;
-            (sign, accent) = type switch
+            // 업종과 시설을 한눈에 구분하는 간판 아이콘과 대표색 선택
+            (BuildingPart sign, Color32 accent) = type switch
             {
                 BuildingType.ConvenienceStore => (BuildingPart.ConvenienceIcon, new Color32(40, 160, 150, 255)),
                 BuildingType.NeighborhoodMarket or BuildingType.SmallSupermarket =>
                     (BuildingPart.MartIcon, new Color32(226, 120, 40, 255)),
+                BuildingType.Hypermarket => (BuildingPart.MartIcon, new Color32(206, 60, 46, 255)),
                 BuildingType.Pharmacy => (BuildingPart.PharmacyIcon, new Color32(60, 150, 90, 255)),
                 BuildingType.Restaurant or BuildingType.RiversideRestaurant =>
                     (BuildingPart.FoodIcon, new Color32(200, 60, 50, 255)),
@@ -723,15 +643,24 @@ namespace RotWorld
                 BuildingType.HardwareStore or BuildingType.ToolStore or BuildingType.RepairShop =>
                     (BuildingPart.ToolIcon, new Color32(226, 176, 50, 255)),
                 BuildingType.FishingSupplyStore => (BuildingPart.FishIcon, new Color32(50, 110, 180, 255)),
-                _ => form == BuildingForm.Shop
+                BuildingType.DepartmentStore => (BuildingPart.BagIcon, new Color32(40, 110, 80, 255)),
+                BuildingType.Hotel => (BuildingPart.HotelIcon, new Color32(176, 58, 136, 255)),
+                BuildingType.Hospital => (BuildingPart.HospitalIcon, new Color32(206, 52, 48, 255)),
+                BuildingType.PoliceStation => (BuildingPart.PoliceIcon, new Color32(40, 64, 140, 255)),
+                BuildingType.VillageHall or BuildingType.CampsiteOffice => (BuildingPart.CivicIcon, new Color32(60, 100, 150, 255)),
+                BuildingType.HealthCenter => (BuildingPart.PharmacyIcon, new Color32(60, 150, 90, 255)),
+                BuildingType.PublicRestroom => (BuildingPart.RestroomIcon, new Color32(60, 120, 180, 255)),
+                BuildingType.Guardhouse => (BuildingPart.GuardIcon, new Color32(46, 70, 120, 255)),
+                BuildingType.CoastalOutpost => (BuildingPart.GuardIcon, new Color32(50, 96, 70, 255)),
+                BuildingType.Apartment => (BuildingPart.None, ApartmentAccents[variation % ApartmentAccents.Length]),
+                _ => form == BuildingForm.Shop || form == BuildingForm.Office
                     ? (BuildingPart.OfficeIcon, new Color32(50, 70, 120, 255)) : (BuildingPart.None, White)
             };
             bool hasAwning = type == BuildingType.Restaurant || type == BuildingType.RiversideRestaurant ||
                 type == BuildingType.Cafe || type == BuildingType.NeighborhoodMarket || type == BuildingType.SmallSupermarket;
             // 공장 굴뚝만 지붕 위로 올라가므로 선택과 앞뒤 판정의 표시 높이에 반영
-            height = form == BuildingForm.Factory ? FactoryStackRise : 0;
-            return new BuildingStyle(category, roof, wall, door, sign, detail, height, variant, isPitched,
-                form, variation, accent, hasAwning);
+            int height = form == BuildingForm.Factory ? FactoryStackRise : 0;
+            return new BuildingStyle(form, height, variation, sign, accent, hasAwning);
         }
 
 
