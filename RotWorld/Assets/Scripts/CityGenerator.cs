@@ -63,7 +63,7 @@ namespace RotWorld
         public RectInt Bounds { get; }
         public Vector2Int Door { get; }
 
-        // 기존 외형 분류와 독립적인 건물 종류 및 아이템 재고
+        // 기존 외형 분류와 독립적인 건물 종류 및 ItemCatalog.All 순서의 아이템 재고
         public int Kind { get; }
         public BuildingType Type { get; }
         public string Name => BuildingCatalog.GetName(Type);

@@ -23,11 +23,10 @@ namespace RotWorld
         private const float MinimumRiverHalfWidth = 1.5f;
         private const float RiverHalfWidthRatio = .012f;
 
-        // 지역 면적 보정과 개발 및 물자 기준
+        // 지역 면적 보정과 개발 기준
         private const int RegionAdjustmentPasses = 18;
         private const float MaxRegionDeviation = .025f;
         private const float DefaultDensity = 65f;
-        private const float SupplyPercentageBase = 100f;
 
         // 도로 굴곡 적용 거리
         private const int MinimumBendDistanceSquared = 400;
@@ -96,7 +95,10 @@ namespace RotWorld
             PopulateBuildings();
             ConnectBuildings();
             PopulateNaturalBuildings();
+
+            // 확정된 건물 종류에 맞춰 재고 생성
             BuildingCatalog.AssignTypes(mapData);
+            AssignStock();
         }
 
 
@@ -1252,16 +1254,22 @@ namespace RotWorld
                 return false;
             }
 
-            // 재고 전용 난수와 물자 설정에서 건물별 아이템 수량 생성
-            var stock = new int[5];
-
-            for (int i = 0; i < stock.Length; i++)
-            {
-                stock[i] = (int)(stockRandom.Next(0, i == 4 ? 3 : 9) * settingsData.Supplies / SupplyPercentageBase);
-            }
-
-            mapData.Buildings.Add(new CityBuilding(bounds, door, kind, stock));
+            // 종류 배정 전이므로 빈 재고로 등록하고 AssignStock에서 교체
+            mapData.Buildings.Add(new CityBuilding(bounds, door, kind, Array.Empty<int>()));
             return true;
+        }
+
+
+        // 종류 배정이 끝난 건물 목록 순서대로 종류별 재고 생성
+        private void AssignStock()
+        {
+            // 재고 전용 난수 흐름만 사용해 지형과 종류 배정 결과 보존
+            for (int b = 0; b < mapData.Buildings.Count; b++)
+            {
+                var building = mapData.Buildings[b];
+                int[] stock = BuildingStockTable.Create(building.Type, stockRandom, settingsData.Supplies);
+                mapData.Buildings[b] = new CityBuilding(building.Bounds, building.Door, building.Kind, stock, building.Type);
+            }
         }
 
 
