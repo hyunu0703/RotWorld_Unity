@@ -393,3 +393,4 @@ MonoBehaviour:
   _koreanFont: {fileID: 11400000, guid: 9c6b0e2dd23b45241b56c2f3c1109fe7, type: 2}
   _englishFont: {fileID: 11400000, guid: 25407cff6ff53ba4385f3e83524a41b0, type: 2}
   _worldCamera: {fileID: 519420031}
+  terrainArt: {fileID: 11400000, guid: cbe00373386341b2aa29fe954bcf70e1, type: 2}

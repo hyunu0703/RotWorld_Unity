@@ -1,4 +1,3 @@
-using Unity.Collections;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
@@ -6,12 +5,13 @@ using UnityEngine.InputSystem;
 namespace RotWorld
 {
     /// <summary>
-    /// 도시 데이터를 정사각형 픽셀 원본으로 표시하고 단계별 줌과 이동 제공
+    /// 도시 데이터와 구역 지형 표시를 연결하고 기존 카메라와 소환 조작 제공
     /// </summary>
     public sealed class CityMapView : MonoBehaviour
     {
         // 지도 표시 해상도와 전체 보기 전환 단계
-        public const int PixelsPerTile = 8;
+        public const int PixelsPerTile = CityArtCatalog.PixelsPerTile;
+        private const int LegacyPixelsPerTile = 8;
         private const int UnitPixelScale = 2;
         private const int OverviewTransitionSteps = 4;
         private const int MaxZoom = 6 + OverviewTransitionSteps - 1;
@@ -19,6 +19,7 @@ namespace RotWorld
         private const int ToolbarHeightAllowance = 100;
         private const float OverviewMarginScale = 1.12f;
         private const int CameraDepth = -10;
+        private const int MapSortingOrder = 0;
 
         // 카메라 계산 입력과 마지막 적용 상태
         private CityMap cameraMap;
@@ -29,15 +30,9 @@ namespace RotWorld
         private float cameraSize;
         private Vector3 cameraPosition;
 
-        // 타일 좌표 해시와 지형 질감 빈도
-        private const int HorizontalHashMultiplier = 73856093;
-        private const int VerticalHashMultiplier = 19349663;
-        private const int GrassVariationInterval = 19;
-        private const int SandVariationInterval = 23;
-
-        // 원본 지도 그래픽 자원 소유
-        private Texture2D mapTexture;
-        private Sprite mapSprite;
+        // 지형 카탈로그와 지도별 구역 자원 소유
+        private CityArtCatalog terrainArt;
+        private CityChunkRenderer terrainRenderer;
 
         // 전체 보기 그래픽 자원과 픽셀 배율
         private Texture2D overviewTexture;
@@ -78,58 +73,102 @@ namespace RotWorld
             viewCamera.allowMSAA = false;
             viewCamera.backgroundColor = Hex(0x264d68);
             spriteRenderer = gameObject.AddComponent<SpriteRenderer>();
+            // 축소 지도는 상세 구역과 선택 및 유닛보다 먼저 표시
+            spriteRenderer.sortingOrder = MapSortingOrder - 1;
         }
 
 
-        // 원본 픽셀 배열 생성 후 기존 표시 자원 교체
+        // Scene에서 전달한 지형 카탈로그 연결
+        public void ConfigureArt(CityArtCatalog art)
+        {
+            // 필수 아트 누락을 지도 생성 전에 명시적으로 중단
+            if (art == null)
+            {
+                throw new System.ArgumentNullException(nameof(art));
+            }
+
+            art.Prepare();
+            terrainArt = art;
+        }
+
+
+        // 축소 지도와 지연 생성 구역을 준비한 뒤 기존 지도 교체
         public void Show(CityMap map)
         {
-            // 지도 타일과 시드에서 원본 픽셀 색상 생성
-            int width = map.Size * PixelsPerTile;
+            // 기존 생성 데이터와 Scene 아트 연결 상태 검사
+            if (map == null || terrainArt == null || viewCamera == null)
+            {
+                throw new System.InvalidOperationException("지도 또는 지형 카탈로그 또는 카메라 연결 누락");
+            }
 
-            // 텍스처 소유 버퍼에 직접 기록해 별도 대형 배열과 업로드 복사 제거
-            var nextTexture = new Texture2D(width, width, TextureFormat.RGBA32, false);
-            nextTexture.name = "City pixels";
-            nextTexture.filterMode = FilterMode.Point;
-            nextTexture.wrapMode = TextureWrapMode.Clamp;
-            var pixels = nextTexture.GetRawTextureData<Color32>();
+            int overviewSize = Mathf.Min(MaximumOverviewSize, map.Size);
+            Texture2D nextOverview = null;
+            Sprite nextOverviewSprite = null;
+            CityChunkRenderer nextRenderer = null;
+            float nextPixelsPerUnit = overviewSize / (float)map.Size;
 
             try
             {
-                PaintMap(map, width, pixels);
+                // 전체 지도는 최대 256픽셀로 직접 샘플링해 대형 원본 생성 제거
+                nextOverview = new Texture2D(overviewSize, overviewSize, TextureFormat.RGBA32, false);
+                nextOverview.name = "Island overview pixels";
+                nextOverview.filterMode = FilterMode.Point;
+                nextOverview.wrapMode = TextureWrapMode.Clamp;
+                var pixels = nextOverview.GetRawTextureData<Color32>();
+
+                for (int y = 0; y < overviewSize; y++)
+                {
+                    for (int x = 0; x < overviewSize; x++)
+                    {
+                        float worldX = (x + .5f) / nextPixelsPerUnit;
+                        float worldY = (y + .5f) / nextPixelsPerUnit;
+                        int tileX = (int)worldX;
+                        int tileY = (int)worldY;
+                        int index = tileY * map.Size + tileX;
+                        byte tile = map.Tiles[index];
+                        bool isTerrain = tile == CityGenerator.Grass || tile == CityGenerator.Sand ||
+                            tile == CityGenerator.Ocean || tile == CityGenerator.Shallows || tile == CityGenerator.River;
+                        bool isStreet = CityArtCatalog.IsStreet(tile);
+                        pixels[y * overviewSize + x] = isTerrain
+                            ? terrainArt.Sample(terrainArt.GetTileIndex(map, tileX, tileY), map.Regions[index],
+                                tile == CityGenerator.Shallows || tile == CityGenerator.River, terrainArt.GetCoastMask(map, tileX, tileY),
+                                (int)((worldX - tileX) * PixelsPerTile), (int)((worldY - tileY) * PixelsPerTile))
+                            : isStreet ? terrainArt.SampleStreet(terrainArt.GetStreetTile(map, tileX, tileY),
+                                (int)((worldX - tileX) * PixelsPerTile), (int)((worldY - tileY) * PixelsPerTile)) : Hex(0x91978c);
+                    }
+                }
+
+                foreach (var building in map.Buildings)
+                {
+                    CityChunkRenderer.DrawBuilding(pixels, overviewSize, building, 0, 0, nextPixelsPerUnit / LegacyPixelsPerTile);
+                }
+
+                nextOverview.Apply(false, true);
+                nextOverviewSprite = Sprite.Create(nextOverview, new Rect(0, 0, overviewSize, overviewSize),
+                    Vector2.zero, nextPixelsPerUnit, 0, SpriteMeshType.FullRect);
+                nextRenderer = new CityChunkRenderer(map, terrainArt, transform, MapSortingOrder);
             }
             catch
             {
-                // 픽셀 구성 실패 시 새 텍스처 반환 및 호출자 오류 처리 전달
-                Destroy(nextTexture);
+                // 새 자원 준비 실패 시 기존 지도 유지와 부분 생성 자원 반환
+                if (nextRenderer != null)
+                {
+                    nextRenderer.Dispose();
+                }
+
+                if (nextOverviewSprite != null)
+                {
+                    Destroy(nextOverviewSprite);
+                }
+
+                if (nextOverview != null)
+                {
+                    Destroy(nextOverview);
+                }
+
                 throw;
             }
 
-            var nextSprite = Sprite.Create(nextTexture, new Rect(0, 0, width, width), Vector2.zero, PixelsPerTile, 0, SpriteMeshType.FullRect);
-            // 전체 보기에서는 최대 256픽셀 지도로 명시적 간소화
-            int overviewSize = Mathf.Min(MaximumOverviewSize, map.Size);
-            int sampleStep = width / overviewSize;
-            var overviewPixels = new Color32[overviewSize * overviewSize];
-
-            for (int y = 0; y < overviewSize; y++)
-            {
-                for (int x = 0; x < overviewSize; x++)
-                {
-                    overviewPixels[y * overviewSize + x] = pixels[(y * sampleStep + sampleStep / 2) * width + x * sampleStep + sampleStep / 2];
-                }
-            }
-
-            // 전체 보기 샘플링 완료 후 CPU 버퍼 해제 및 GPU 업로드
-            nextTexture.Apply(false, true);
-            var nextOverview = new Texture2D(overviewSize, overviewSize, TextureFormat.RGBA32, false);
-            nextOverview.name = "Island overview pixels";
-            nextOverview.filterMode = FilterMode.Point;
-            nextOverview.wrapMode = TextureWrapMode.Clamp;
-            nextOverview.SetPixels32(overviewPixels);
-            nextOverview.Apply(false, true);
-            float overviewPixelsPerUnit = overviewSize / (float)map.Size;
-            var nextOverviewSprite = Sprite.Create(nextOverview, new Rect(0, 0, overviewSize, overviewSize), Vector2.zero, overviewPixelsPerUnit, 0, SpriteMeshType.FullRect);
-            // 새 표시 자원 준비 후 기존 자원 교체
             ReleaseGraphics();
 
             // 새 지도 교체 시 이전 지도에 소환한 표시 객체 정리
@@ -140,11 +179,10 @@ namespace RotWorld
 
             summonedUnits = new GameObject("Summoned Units").transform;
             summonedUnits.SetParent(transform, false);
-            mapTexture = nextTexture;
-            mapSprite = nextSprite;
+            terrainRenderer = nextRenderer;
             overviewTexture = nextOverview;
             overviewSprite = nextOverviewSprite;
-            this.overviewPixelsPerUnit = overviewPixelsPerUnit;
+            overviewPixelsPerUnit = nextPixelsPerUnit;
             mapData = map;
 
             // 초기 인구도 소환 유닛과 같은 정밀도와 공용 아이콘으로 표시
@@ -165,109 +203,11 @@ namespace RotWorld
         }
 
 
-        // 텍스처 소유 픽셀 버퍼에 지도와 건물의 동일 색상 기록
-        private static void PaintMap(CityMap map, int width, NativeArray<Color32> pixels)
-        {
-            // 타일별 공통 조회 후 기존 전역 픽셀 좌표의 질감과 경계 유지
-            for (int tileY = 0; tileY < map.Size; tileY++)
-            {
-                for (int tileX = 0; tileX < map.Size; tileX++)
-                {
-                    int tileIndex = tileY * map.Size + tileX;
-                    byte tile = map.Tiles[tileIndex];
-                    CityRegion region = map.Regions[tileIndex];
-                    bool grassVariation = tile == CityGenerator.Grass;
-                    Color32 baseColor = tile == CityGenerator.Grass ? Hex(0x61764a)
-                        : tile == CityGenerator.Ocean ? Hex(0x264d68)
-                        : tile == CityGenerator.Shallows || tile == CityGenerator.River ? Hex(0x397f91)
-                        : tile == CityGenerator.Bridge ? Hex(0x9e947c)
-                        : tile == CityGenerator.Sand ? Hex(0xd2c38e)
-                        : tile == CityGenerator.Road ? Hex(0x454c51)
-                        : tile == CityGenerator.Path ? Hex(0xb5ab8d) : Hex(0x91978c);
-
-                    if (tile == CityGenerator.Grass)
-                    {
-                        if (region == CityRegion.Downtown)
-                        {
-                            baseColor = Hex(0x85877b);
-                            grassVariation = false;
-                        }
-                        else if (region == CityRegion.Industrial)
-                        {
-                            baseColor = Hex(0x8e8876);
-                            grassVariation = false;
-                        }
-                        else if (region == CityRegion.Riverside)
-                        {
-                            baseColor = Hex(0x70865b);
-                            grassVariation = false;
-                        }
-                        else if (region == CityRegion.Natural)
-                        {
-                            baseColor = Hex(0x526d45);
-                            grassVariation = false;
-                        }
-                    }
-
-                    bool hasVariation = grassVariation || tile == CityGenerator.Sand;
-                    bool hasBorder = tile == CityGenerator.Pavement || tile == CityGenerator.Bridge;
-                    Color32 borderColor = tile == CityGenerator.Pavement ? Hex(0x7f877e) : Hex(0x766e61);
-
-                    for (int pixelY = 0; pixelY < PixelsPerTile; pixelY++)
-                    {
-                        int y = tileY * PixelsPerTile + pixelY;
-
-                        for (int pixelX = 0; pixelX < PixelsPerTile; pixelX++)
-                        {
-                            int x = tileX * PixelsPerTile + pixelX;
-                            Color32 color = baseColor;
-
-                            if (hasVariation)
-                            {
-                                // 기존 전역 픽셀 해시와 색상 분포 유지
-                                uint hash = unchecked((uint)(x * HorizontalHashMultiplier ^ y * VerticalHashMultiplier ^ map.Seed));
-                                bool alternate = hash % (grassVariation ? GrassVariationInterval : SandVariationInterval) == 0;
-                                color = alternate ? (grassVariation ? Hex(0x6f8051) : Hex(0xc4b57c)) : baseColor;
-                            }
-
-                            if (hasBorder && (pixelX == 0 || pixelY == 0))
-                            {
-                                color = borderColor;
-                            }
-
-                            pixels[y * width + x] = color;
-                        }
-                    }
-                }
-            }
-
-            foreach (var building in map.Buildings)
-            {
-                DrawBuilding(pixels, width, building);
-            }
-
-        }
-
-
         // 팔레트 정수값을 불투명 색으로 변환
         private static Color32 Hex(int rgb)
         {
             // RGB 정수의 채널 분리와 불투명 알파 적용
             return new Color32((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb, 255);
-        }
-
-
-        // 경계 안의 픽셀 사각형 채우기
-        private static void Fill(NativeArray<Color32> pixels, int stride, int x, int y, int width, int height, Color32 color)
-        {
-            // 픽셀 배열 경계 안으로 제한한 사각형 영역 채우기
-            for (int py = Mathf.Max(0, y); py < Mathf.Min(stride, y + height); py++)
-            {
-                for (int px = Mathf.Max(0, x); px < Mathf.Min(stride, x + width); px++)
-                {
-                    pixels[py * stride + px] = color;
-                }
-            }
         }
 
 
@@ -285,57 +225,6 @@ namespace RotWorld
         }
 
 
-        // 용도별 지붕과 벽 및 출입구 표시
-        private static void DrawBuilding(NativeArray<Color32> pixels, int stride, CityBuilding building)
-        {
-            // 건물 필지를 픽셀 좌표로 환산한 뒤 외형과 출입구 표시
-            var r = building.Bounds;
-            int x = r.x * PixelsPerTile;
-            int y = r.y * PixelsPerTile;
-            int w = r.width * PixelsPerTile;
-            int h = r.height * PixelsPerTile;
-            Color32 roof = building.Kind == 0 ? Hex(0x9d604b) : building.Kind == 1 ? Hex(0x64848b)
-                : building.Kind == 3 ? Hex(0x596977) : building.Kind == 4 ? Hex(0x789b96) : Hex(0x8a8890);
-            Fill(pixels, stride, x + 2, y - 2, w, h, Hex(0x424b40));
-            Fill(pixels, stride, x, y, w, h, Hex(0x353e3f));
-            Fill(pixels, stride, x + 1, y + 1, w - 2, 6, Hex(0xc1b494));
-            Fill(pixels, stride, x + 1, y + 7, w - 2, h - 8, roof);
-            Fill(pixels, stride, x + 3, y + h - 3, w - 6, 1, Hex(0xc2b194));
-
-            for (int wx = x + 5; wx < x + w - 4; wx += 9)
-            {
-                Fill(pixels, stride, wx, y + 2, 3, 3, Hex(0x465c67));
-            }
-
-            if (building.Kind == 0)
-            {
-                Fill(pixels, stride, x + 2, y + h / 2, w - 4, 2, Hex(0x794c40));
-                Fill(pixels, stride, x + w - 10, y + h - 10, 4, 6, Hex(0x555453));
-            }
-            else
-            {
-                Fill(pixels, stride, x + w / 2, y + h / 2, 7, 5, Hex(0xb4b8ad));
-                Fill(pixels, stride, x + 3, y + 7, w - 6, 2, building.Kind == 1 ? Hex(0xb69a56) : Hex(0x666975));
-            }
-
-            if (building.Kind == 3)
-            {
-                for (int floorY = y + 9; floorY < y + h - 3; floorY += 6)
-                {
-                    for (int wx = x + 4; wx < x + w - 3; wx += 6)
-                    {
-                        Fill(pixels, stride, wx, floorY, 2, 2, Hex(0xb8c5bc));
-                    }
-                }
-            }
-
-            // 생성 데이터의 실제 출입구 위치를 지붕 위에 표시
-            int doorX = building.Door.x * PixelsPerTile;
-            int doorY = building.Door.y * PixelsPerTile;
-            Fill(pixels, stride, doorX + 2, doorY + 2, 4, 4, Hex(0xd1c6a0));
-        }
-
-
         // 인도 위 작은 인물과 좀비 실루엣 표시
         private static void DrawPeople(Color32[] pixels, int stride, System.Collections.Generic.List<Vector2Int> people, bool zombie, int walkFrame = 0)
         {
@@ -346,8 +235,8 @@ namespace RotWorld
 
             foreach (var person in people)
             {
-                int x = (person.x * PixelsPerTile + 2) * UnitPixelScale;
-                int y = person.y * PixelsPerTile * UnitPixelScale;
+                int x = (person.x * LegacyPixelsPerTile + 2) * UnitPixelScale;
+                int y = person.y * LegacyPixelsPerTile * UnitPixelScale;
                 int leftLift = walkFrame == 1 ? UnitPixelScale : 0;
                 int rightLift = walkFrame == 2 ? UnitPixelScale : 0;
                 Fill(pixels, stride, x, y + leftLift, UnitPixelScale, 2 * UnitPixelScale - leftLift, Hex(0x293539));
@@ -402,7 +291,7 @@ namespace RotWorld
             }
 
             int detailZoom = Mathf.Max(1, zoom - OverviewTransitionSteps + 1);
-            float pixelsPerUnit = PixelsPerTile * detailZoom;
+            float pixelsPerUnit = LegacyPixelsPerTile * detailZoom;
 
             // 전체 보기와 상세 원본 사이에 동일 비율의 중간 확대 단계 적용
             if (mapData != null && zoom < OverviewTransitionSteps)
@@ -411,12 +300,12 @@ namespace RotWorld
                 int overviewScale = Mathf.Max(1, Mathf.FloorToInt(Mathf.Min(viewCamera.pixelWidth, availableHeight) / (overviewTexture.width * OverviewMarginScale)));
                 float overviewDisplayScale = overviewScale * overviewPixelsPerUnit;
                 float transitionProgress = zoom / (float)OverviewTransitionSteps;
-                pixelsPerUnit = overviewDisplayScale * Mathf.Pow(PixelsPerTile / overviewDisplayScale, transitionProgress);
-                spriteRenderer.sprite = zoom == 0 ? overviewSprite : mapSprite;
+                pixelsPerUnit = overviewDisplayScale * Mathf.Pow(LegacyPixelsPerTile / overviewDisplayScale, transitionProgress);
+                spriteRenderer.sprite = overviewSprite;
             }
             else if (spriteRenderer != null)
             {
-                spriteRenderer.sprite = mapSprite;
+                spriteRenderer.sprite = overviewSprite;
             }
 
             // 픽셀 격자에 맞춘 카메라 크기와 중심 좌표 적용
@@ -445,6 +334,7 @@ namespace RotWorld
             }
 
             UpdateCamera();
+
             var mouse = Mouse.current;
 
             if (mouse == null || IsInputBlocked)
@@ -493,6 +383,17 @@ namespace RotWorld
         }
 
 
+        // 입력과 카메라 변경 이후 화면 주변 지형 구역 갱신
+        private void LateUpdate()
+        {
+            // 카메라 입력 중단 상태와 독립적인 지연 생성 및 캐시 표시 처리
+            if (terrainRenderer != null)
+            {
+                terrainRenderer.UpdateVisible(viewCamera, zoom > 0);
+            }
+        }
+
+
         // 기존 지도 인물 표현을 재사용한 유형별 공용 소환 아이콘 조회
         public Sprite GetUnitIcon(bool zombie)
         {
@@ -504,7 +405,7 @@ namespace RotWorld
                 return icon;
             }
 
-            int iconSize = PixelsPerTile * UnitPixelScale;
+            int iconSize = LegacyPixelsPerTile * UnitPixelScale;
             var pixels = new Color32[iconSize * iconSize];
             DrawPeople(pixels, iconSize, new System.Collections.Generic.List<Vector2Int> { Vector2Int.zero }, zombie);
             var texture = new Texture2D(iconSize, iconSize, TextureFormat.RGBA32, false);
@@ -532,7 +433,7 @@ namespace RotWorld
         {
             // 지도 렌더러의 레이어를 공유하고 인간보다 한 단계 아래에 배치
             selectionCanvas.sortingLayerID = spriteRenderer.sortingLayerID;
-            selectionCanvas.sortingOrder = spriteRenderer.sortingOrder + UnitWalkAnimation.LivingSortingOffset - 1;
+            selectionCanvas.sortingOrder = MapSortingOrder + UnitWalkAnimation.LivingSortingOffset - 1;
         }
 
 
@@ -637,7 +538,7 @@ namespace RotWorld
             visual.transform.SetParent(unit.transform, false);
             var renderer = visual.AddComponent<SpriteRenderer>();
             renderer.sprite = GetUnitIcon(zombie);
-            renderer.sortingOrder = spriteRenderer.sortingOrder + UnitWalkAnimation.LivingSortingOffset;
+            renderer.sortingOrder = MapSortingOrder + UnitWalkAnimation.LivingSortingOffset;
             var animationView = unit.AddComponent<UnitWalkAnimation>();
             animationView.Initialize(renderer, GetUnitWalkFrames(zombie));
 
@@ -661,7 +562,7 @@ namespace RotWorld
             }
 
             const int FrameCount = 3;
-            int iconSize = PixelsPerTile * UnitPixelScale;
+            int iconSize = LegacyPixelsPerTile * UnitPixelScale;
             frames = new Sprite[FrameCount];
             if (!white)
             {
@@ -729,7 +630,7 @@ namespace RotWorld
             const float FlashDuration = .2f;
             const int FlashCount = 4;
             const float FlashStrength = 1f;
-            int size = PixelsPerTile * UnitPixelScale;
+            int size = LegacyPixelsPerTile * UnitPixelScale;
             var human = new Color32[size * size];
             var zombie = new Color32[size * size];
             var origin = new System.Collections.Generic.List<Vector2Int> { Vector2Int.zero };
@@ -785,7 +686,7 @@ namespace RotWorld
             }
 
             const int FrameCount = 51;
-            int size = PixelsPerTile * UnitPixelScale;
+            int size = LegacyPixelsPerTile * UnitPixelScale;
             var zombie = new Color32[size * size];
             DrawPeople(zombie, size, new System.Collections.Generic.List<Vector2Int> { Vector2Int.zero }, true);
             var fadeFrames = new Sprite[FrameCount];
@@ -806,7 +707,7 @@ namespace RotWorld
 
             // 화면 도트 한 칸 크기의 공용 흰색 먼지 픽셀 생성
             var pixelColor = new[] { new Color32(255, 255, 255, 255) };
-            Sprite pixelSprite = CreatePointSprite(pixelColor, 1, new Vector2(.5f, .5f), PixelsPerTile);
+            Sprite pixelSprite = CreatePointSprite(pixelColor, 1, new Vector2(.5f, .5f), LegacyPixelsPerTile);
 
             // 확대 격자 한 칸을 원본 도트 한 개로 묶어 몸체 픽셀 중심 좌표 수집
             var consumed = new bool[zombie.Length];
@@ -833,7 +734,7 @@ namespace RotWorld
                 }
             }
 
-            zombieDeathVisuals = new UnitDeathVisuals(fadeFrames, pixelSprite, dustPoints.ToArray(), 1f / PixelsPerTile);
+            zombieDeathVisuals = new UnitDeathVisuals(fadeFrames, pixelSprite, dustPoints.ToArray(), 1f / LegacyPixelsPerTile);
             return zombieDeathVisuals;
         }
 
@@ -919,24 +820,22 @@ namespace RotWorld
                 spriteRenderer.sprite = null;
             }
 
-            if (mapSprite != null)
+            if (terrainRenderer != null)
             {
-                Destroy(mapSprite);
-            }
-
-            if (mapTexture != null)
-            {
-                Destroy(mapTexture);
+                terrainRenderer.Dispose();
+                terrainRenderer = null;
             }
 
             if (overviewSprite != null)
             {
                 Destroy(overviewSprite);
+                overviewSprite = null;
             }
 
             if (overviewTexture != null)
             {
                 Destroy(overviewTexture);
+                overviewTexture = null;
             }
         }
 

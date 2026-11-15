@@ -24,6 +24,9 @@ namespace RotWorld
         [FormerlySerializedAs("_worldCamera")]
         [SerializeField] private Camera worldCamera;
 
+        // Scene에서 런타임 지도 뷰로 전달할 지형 그래픽
+        [SerializeField] private CityArtCatalog terrainArt;
+
         // 설정 입력 행 배치와 정수 입력 길이
         private const int FirstSettingsRowY = -112;
         private const int SettingsRowHeight = 48;
@@ -135,9 +138,9 @@ namespace RotWorld
         private void Start()
         {
             // 생성 UI 구성에 필요한 카메라와 폰트 누락 검사
-            if (koreanFont == null || englishFont == null || worldCamera == null)
+            if (koreanFont == null || englishFont == null || worldCamera == null || terrainArt == null)
             {
-                Debug.LogError("도시 시제품의 카메라 또는 neodgm SDF 폰트 참조가 없습니다", this);
+                Debug.LogError("도시 시제품의 카메라 또는 neodgm SDF 폰트 또는 지형 카탈로그 참조가 없습니다", this);
                 enabled = false;
                 return;
             }
@@ -146,6 +149,7 @@ namespace RotWorld
             mapObject.transform.SetParent(transform, false);
             mapView = mapObject.AddComponent<CityMapView>();
             mapView.Initialize(worldCamera);
+            mapView.ConfigureArt(terrainArt);
             BuildInterface();
         }
 
