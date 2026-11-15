@@ -14,7 +14,9 @@ namespace RotWorld
         private const int LegacyPixelsPerTile = 8;
         private const int UnitPixelScale = 2;
         private const int OverviewTransitionSteps = 4;
-        private const int MaxZoom = 6 + OverviewTransitionSteps - 1;
+        // 상세 보기는 원본 타일 픽셀의 정수배만 사용하고 기존 최대 확대율 48픽셀 유지
+        private const int DetailZoomSteps = 3;
+        private const int MaxZoom = DetailZoomSteps + OverviewTransitionSteps - 1;
         private const int MaximumOverviewSize = 256;
         private const int ToolbarHeightAllowance = 100;
         private const float OverviewMarginScale = 1.12f;
@@ -287,17 +289,18 @@ namespace RotWorld
                 return;
             }
 
+            // 상세 보기는 원본 타일 픽셀의 정수배로 표시해 Point 샘플링의 텍셀 누락 방지
             int detailZoom = Mathf.Max(1, zoom - OverviewTransitionSteps + 1);
-            float pixelsPerUnit = LegacyPixelsPerTile * detailZoom;
+            float pixelsPerUnit = PixelsPerTile * detailZoom;
 
-            // 전체 보기와 상세 원본 사이에 동일 비율의 중간 확대 단계 적용
+            // 전체 보기와 상세 원본 1배율 사이에 동일 비율의 중간 확대 단계 적용
             if (mapData != null && zoom < OverviewTransitionSteps)
             {
                 int availableHeight = Mathf.Max(1, viewCamera.pixelHeight - ToolbarHeightAllowance);
                 int overviewScale = Mathf.Max(1, Mathf.FloorToInt(Mathf.Min(viewCamera.pixelWidth, availableHeight) / (overviewTexture.width * OverviewMarginScale)));
                 float overviewDisplayScale = overviewScale * overviewPixelsPerUnit;
                 float transitionProgress = zoom / (float)OverviewTransitionSteps;
-                pixelsPerUnit = overviewDisplayScale * Mathf.Pow(LegacyPixelsPerTile / overviewDisplayScale, transitionProgress);
+                pixelsPerUnit = overviewDisplayScale * Mathf.Pow(PixelsPerTile / overviewDisplayScale, transitionProgress);
                 spriteRenderer.sprite = overviewSprite;
             }
             else if (spriteRenderer != null)
@@ -305,12 +308,11 @@ namespace RotWorld
                 spriteRenderer.sprite = overviewSprite;
             }
 
-            // 픽셀 격자에 맞춘 카메라 크기와 중심 좌표 적용
+            // 현재 배율의 화면 픽셀 격자에 맞춘 카메라 크기와 중심 좌표 적용
             viewCamera.orthographicSize = Mathf.Max(1, viewCamera.pixelHeight) / (2f * pixelsPerUnit);
-            float snapPixelsPerUnit = mapData != null && zoom == 0 ? overviewPixelsPerUnit : PixelsPerTile;
             viewCamera.transform.position = new Vector3(
-                Mathf.Round(viewCenter.x * snapPixelsPerUnit) / snapPixelsPerUnit,
-                Mathf.Round(viewCenter.y * snapPixelsPerUnit) / snapPixelsPerUnit, CameraDepth);
+                Mathf.Round(viewCenter.x * pixelsPerUnit) / pixelsPerUnit,
+                Mathf.Round(viewCenter.y * pixelsPerUnit) / pixelsPerUnit, CameraDepth);
             cameraMap = mapData;
             cameraCenter = viewCenter;
             cameraZoom = zoom;
